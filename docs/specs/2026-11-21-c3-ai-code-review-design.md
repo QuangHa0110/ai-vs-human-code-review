@@ -8,6 +8,12 @@ Ngày: 2026-11-21 · Thời hạn: ~2 tuần (đến khoảng 2026-12-05) · Nh�
 
 Sản phẩm là **báo cáo môn học đạt chuẩn một nghiên cứu thực nghiệm**: có câu hỏi nghiên cứu, phương pháp chặt chẽ, có kiểm chứng, có thống kê, và người khác chạy lại được. Nhóm **không** nhắm gửi bài hội nghị, nên không cần khảo sát tài liệu toàn diện hay chứng minh đóng góp mới so với mọi nghiên cứu trước.
 
+**Định vị so với nghiên cứu đã có** (chi tiết và nguồn: [related-work.md](../related-work.md)). Hướng này đã có người làm, chủ yếu trên Python: SWE-PRBench (arXiv 2026, 350 PR, Java chỉ 15 PR) và SWR-Bench (FSE 2026, 1.000 PR, chỉ Python). Đề tài này là **mở rộng sang Java, kèm bốn điểm mà các bài đó chưa làm**:
+1. Khảo sát trên PR **Java**.
+2. **Phân rã nhiễu bằng chấm tay:** góp ý AI không khớp là nhiễu thật hay lỗi người bỏ sót (cả hai bài trên đều không kiểm tra).
+3. **Kiểm định thống kê có ghép cặp** giữa các mô hình.
+4. **Giám khảo LLM được kiểm chứng với người chấm** và đối chiếu chéo giữa hai họ mô hình (SWE-PRBench chỉ kiểm chứng với rubric).
+
 Câu hỏi nghiên cứu:
 - **RQ1 — Trùng khớp:** Trong các vấn đề mà người review đã chỉ ra, AI phát hiện lại được bao nhiêu phần trăm?
 - **RQ2 — Nhiễu:** Trong các góp ý của AI, bao nhiêu phần trăm không tương ứng với nhận xét nào của người, và trong số đó bao nhiêu là nhiễu thật, bao nhiêu là vấn đề hợp lệ mà người bỏ sót?
@@ -67,6 +73,7 @@ Về công cụ AI: gọi trực tiếp LLM qua API, so sánh 3 mô hình (Claud
 ### 5.2 Làm sạch nhận xét của người (đáp án)
 - Chỉ lấy nhận xét review gắn vào dòng code (review comments), do người khác tác giả PR viết.
 - Loại bot, loại các trả lời trong thread (chỉ giữ nhận xét gốc), loại nhận xét không mang nội dung ("LGTM", "thanks", "+1").
+- **Tiêu chí "nhận xét thực chất" theo SWE-PRBench** để số liệu so sánh được với họ: tác giả là người, dài ≥ 10 từ, có tham chiếu code hoặc từ khóa nội dung. Loại PR có hơn 30% nhận xét đến từ bot review.
 - Một LLM phân loại từng nhận xét: *có thể hành động* hay *không*, và gán loại vấn đề (xem 5.6). Nhóm kiểm tra một mẫu kết quả phân loại.
 - **Chống rò rỉ đáp án:** AI review diff tại đúng commit mà người đã review, không dùng diff cuối cùng khi merge.
 
@@ -77,14 +84,14 @@ Về công cụ AI: gọi trực tiếp LLM qua API, so sánh 3 mô hình (Claud
 
 ### 5.4 So khớp (LLM giám khảo)
 - Với mỗi PR: đưa danh sách nhận xét của người và danh sách góp ý của AI cho giám khảo. Giám khảo xác định các cặp *cùng nói về một vấn đề* (gần vị trí, cùng nội dung; không cần cùng câu chữ).
-- Mô hình giám khảo: Claude. Rủi ro thiên vị khi Claude chấm chính Claude được ghi trong phần mối đe dọa, và được kiểm tra bằng cách so độ chính xác của giám khảo trên đầu ra của từng mô hình riêng.
+- Giám khảo chính: Claude. **Giám khảo thứ hai: GPT**, chạy trên tập kiểm chứng (5.5). Đo độ đồng thuận giữa hai giám khảo và so từng giám khảo với nhãn của người; so độ chính xác của mỗi giám khảo trên đầu ra của từng mô hình để phát hiện thiên vị "chấm chính họ nhà mình". Nếu hai giám khảo lệch đáng kể, báo cáo cả hai kết quả. Điều SWE-PRBench tự nhận là còn thiếu.
 
 ### 5.5 Chấm tay (nhãn chuẩn của người)
 - **Hướng dẫn chấm** viết trước, có ví dụ cho từng trường hợp. Cả nhóm chấm thử 5 PR chung để thống nhất cách hiểu, sau đó mới chia việc.
 - **Tập kiểm chứng giám khảo:** khoảng 20% số PR (~20 PR, cả 3 mô hình). Mỗi PR do **2 người chấm độc lập**, người thứ ba phân xử chỗ lệch.
   - Đo độ đồng thuận giữa 2 người chấm (Cohen's kappa) trước, rồi đo đồng thuận giữa nhãn đã phân xử và giám khảo.
   - Ngưỡng chấp nhận **kappa ≥ 0,6** cho cả hai. Nếu giám khảo dưới ngưỡng: sửa prompt giám khảo **một lần**, chạy lại, rồi báo cáo con số cuối cùng dù đạt hay không.
-- **Phân tích nhiễu:** lấy ngẫu nhiên (seed cố định) **50 góp ý không khớp cho mỗi mô hình** (150 mục). Mỗi mục do 2 người chấm độc lập thành *nhiễu thật* hoặc *hợp lệ nhưng người bỏ sót*, người thứ ba phân xử. Báo cáo kappa.
+- **Phân tích nhiễu:** lấy ngẫu nhiên (seed cố định) **50 góp ý không khớp cho mỗi mô hình** (150 mục). Mỗi mục do 2 người chấm độc lập thành *nhiễu thật* hoặc *hợp lệ nhưng người bỏ sót*, người thứ ba phân xử. Báo cáo kappa. Với mục là *nhiễu thật*, chấm tiếp nguyên nhân theo **bảng phân loại của SWR-Bench** (thiếu hiểu biết ngữ cảnh, quá nhạy với thay đổi, mơ hồ/không hành động được, thiếu kiến thức miền, ngược best practice, khác) để so sánh trực tiếp được với họ.
 - Người chấm không biết góp ý đến từ mô hình nào (ẩn tên mô hình) để tránh thiên kiến.
 
 ### 5.6 Các quyết định chi tiết (Claude chốt, nhóm có thể sửa)
@@ -109,6 +116,7 @@ Về công cụ AI: gọi trực tiếp LLM qua API, so sánh 3 mô hình (Claud
 - *Cấu trúc:* nhận xét của người là "đáp án" không hoàn hảo; định nghĩa "trùng khớp" mang tính chủ quan.
 - *Ngoại tại:* chỉ Java, chỉ 2–3 dự án Apache/mã nguồn mở, một prompt duy nhất.
 - *Tái lập:* mô hình thương mại thay đổi theo thời gian; có thể dữ liệu PR công khai đã nằm trong dữ liệu huấn luyện.
+- *So sánh với nghiên cứu trước:* khác bộ dữ liệu (Java so với Python), khác cách lọc và khác giám khảo, nên chỉ so sánh định tính với SWE-PRBench và SWR-Bench, không so số tuyệt đối.
 
 ## 6. Tổ chức nhóm (đề xuất)
 
@@ -118,7 +126,7 @@ Về công cụ AI: gọi trực tiếp LLM qua API, so sánh 3 mô hình (Claud
 | Pipeline | Script AI review cho 3 mô hình, script giám khảo |
 | Chấm tay | Viết hướng dẫn chấm, điều phối chia việc và phân xử (cả 5 người cùng chấm) |
 | Thống kê | Tính chỉ số, khoảng tin cậy, kiểm định, biểu đồ |
-| Nghiên cứu liên quan | Tổng quan các nghiên cứu về AI code review và LLM-as-judge |
+| Nghiên cứu liên quan | Mở rộng [related-work.md](../related-work.md) thành phần nghiên cứu liên quan; đối chiếu lại số liệu gốc của SWE-PRBench và SWR-Bench trước khi trích dẫn (một phần mới đọc qua bản tóm tắt) |
 
 Mỗi người còn viết một phần báo cáo gắn với vai trò của mình. Nhóm tự phân công người cụ thể.
 
