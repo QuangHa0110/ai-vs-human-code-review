@@ -21,6 +21,20 @@ Tra cứu ngày 2026-11-21. Phần lớn là preprint arXiv, chưa qua bình duy
 - **Phân loại góp ý sai (100 mẫu):** thiếu hiểu biết ngữ cảnh 48%, quá nhạy với thay đổi 17%, mơ hồ/không hành động được 16%, thiếu kiến thức miền 13%, ngược best practice 3%, khác 3%.
 - **Chưa làm:** **không kiểm định thống kê, không có khoảng tin cậy**; mọi góp ý không khớp đều bị tính là sai, không kiểm tra liệu người có bỏ sót; chỉ có Python.
 
+### AACR-Bench (Alibaba + ĐH Nam Kinh, arXiv 2601.19494, 01/2026, preprint) — nguồn nhãn chuyên gia D1
+- 200 PR, 50 repo, 10 ngôn ngữ (PR 12/2024–12/2025). Repo: https://github.com/alibaba/aacr-bench (Apache-2.0).
+- Đáp án: gộp nhận xét gốc của người với góp ý của 6 mô hình (Claude-4.5-Sonnet, GPT-5.2, Gemini-3-Pro, DeepSeek-V3.2, Qwen3-Coder, GLM-4.7); 80 kỹ sư (≥ 2 năm kinh nghiệm) xác minh, mỗi mục ≥ 2 người, nhóm 6 người phân xử. Không báo cáo kappa.
+- Toàn bộ: 1.506 vấn đề hợp lệ, 1.114 (74%) đến từ AI. **Phần Java (nhóm tự đếm từ `dataset/v1`)**: 30 PR, 5 repo (elasticsearch, keycloak, dbeaver, kestra, spring-ai-alibaba); 213 vấn đề hợp lệ, **chỉ 61 (29%) gốc từ người**; tập "negative" có 59 nhận xét Java (16 gốc từ người, 43 từ AI) — ý nghĩa chính xác cần xác minh.
+- Kết quả: chế độ agent precision cao/recall thấp (Claude-4.5 P 39,9 / R 10,1), không ngữ cảnh thì ngược lại (P 8,7 / R 42,9). Giám khảo Qwen3-235B, chưa thấy kiểm chứng với người.
+- README tự nhận: góp ý không khớp vẫn có thể là vấn đề hợp lệ.
+
+### Các benchmark khác
+- **c-CRAB** (arXiv 2603.23448, 03/2026): biến nhận xét người thành test; 184 PR, 234 nhận xét (Python). Claude Code đạt 32,1%, hợp 4 công cụ 41,5%. Công cụ AI nêu nhiều vấn đề kiểm thử/độ bền hơn người, ít vấn đề thiết kế/tài liệu hơn. Baseline người = 100% do cách xây dựng.
+- **CRJudgeBench** (arXiv 2609.37216, 09/2026): 1.199 nhận xét người gán nhãn đúng/sai kỹ thuật (Python; nhãn âm phần lớn do nhiễu nhân tạo). Các LLM giám khảo gần như không phát hiện được nhận xét sai (recall lớp "sai" 2–21%) — cảnh báo khi dùng LLM để lọc nhiễu.
+- **Martian code-review-benchmark** (github.com/withmartian/code-review-benchmark, MIT): 50 PR, 5 dự án, đáp án do người xác minh.
+- **Bộ dữ liệu cũ:** CodeReviewer, Tufano (Java, mức hàm/đoạn diff, nhiều nhiễu); Chromium và OpenDev Nova (nhãn hữu ích/không hữu ích).
+- **Cách làm gán nhãn trong các bài trên:** SWR-Bench (5 học viên cao học, theo cặp, kappa ≈ 0,66), c-CRAB (2 tác giả), CRJudgeBench (3 tác giả) — nhóm nghiên cứu tự gán nhãn là thông lệ, miễn có quy trình và báo cáo đồng thuận.
+
 ## 2. Nghiên cứu về nhiễu và phản ứng của lập trình viên
 - **"Go Home Copilot, You're Drunk"** (arXiv 2607.21997): 54.713 nhận xét của Copilot, Cursor và Codex trên 341 repo Python. Copilot có tỉ lệ được xử lý 72,9%.
 - **Nghiên cứu về CodeRabbit** (preprint 07/2026, theo kết quả tìm kiếm): 31.073 nhận xét; lập trình viên từ chối 56,3%. Trong số bị từ chối, 43,3% là cảnh báo sai.
@@ -41,7 +55,12 @@ Tra cứu ngày 2026-11-21. Phần lớn là preprint arXiv, chưa qua bình duy
 3. **Kiểm định thống kê có ghép cặp** giữa các mô hình: SWR-Bench không có; SWE-PRBench chỉ dùng bootstrap CI.
 4. **Giám khảo được kiểm chứng với người và đổi chéo họ mô hình:** SWE-PRBench chỉ kiểm chứng với rubric.
 
+5. **Baseline của người trên tập gộp do chuyên gia xác minh:** AACR-Bench có dữ liệu nhưng không phân tích theo góc người so với AI.
+
 ## Nguồn
+- https://arxiv.org/abs/2601.19494 — AACR-Bench
+- https://arxiv.org/abs/2603.23448 — c-CRAB
+- https://arxiv.org/abs/2609.37216 — CRJudgeBench
 - https://arxiv.org/abs/2603.26130 — SWE-PRBench
 - https://arxiv.org/abs/2509.01494 — SWR-Bench
 - https://arxiv.org/abs/2607.21997 — Go Home Copilot
