@@ -24,7 +24,7 @@ Mở rộng:
 - **RQ3 — So sánh mô hình:** Claude, GPT, DeepSeek khác nhau có ý nghĩa thống kê không, khi đã tính độ dao động giữa các lần chạy?
 - **RQ4 — Loại vấn đề:** AI mạnh/yếu ở loại vấn đề nào so với người?
 - **RQ5 — Người so với AI:** Trên tập vấn đề hợp lệ đã gộp, độ phủ và độ chính xác của người review so với từng mô hình ra sao?
-- **RQ6 — Ngữ cảnh:** Cho AI xem thêm toàn bộ file (ngoài diff) làm tăng hay giảm trùng khớp và nhiễu?
+- **RQ6 — Ngữ cảnh:** Khi cùng một công cụ được tự đọc repo (chế độ agent) thay vì chỉ đọc diff, trùng khớp và nhiễu thay đổi thế nào?
 
 Thứ tự ưu tiên: RQ1, RQ2 là bắt buộc; nếu phải cắt, cắt từ RQ6 ngược lên.
 
@@ -46,7 +46,8 @@ Thứ tự ưu tiên: RQ1, RQ2 là bắt buộc; nếu phải cắt, cắt từ 
 ## 4. Ràng buộc
 
 - Ngôn ngữ dự án được review: **Java**. Script: **Python** (lựa chọn của Claude).
-- API key Claude, OpenAI, DeepSeek, GitHub token: chỉ trong `.env`, không commit. Repo công khai: `QuangHa0110/ai-vs-human-code-review`.
+- **Chi phí:** Claude và GPT chạy qua **CLI bằng gói đăng ký của thành viên** (Claude Code, Codex CLI) để tránh chi phí API; chỉ DeepSeek (rẻ) dùng API. Gói đăng ký có giới hạn lượt dùng, nên các lần chạy được rải ra nhiều ngày.
+- DeepSeek API key, GitHub token: chỉ trong `.env`, không commit. Repo công khai: `QuangHa0110/ai-vs-human-code-review`.
 - Dữ liệu bên ngoài dùng theo giấy phép: AACR-Bench (Apache-2.0), SWE-PRBench (MIT).
 - Dữ liệu công bố trong repo phải **ẩn danh tên người dùng GitHub** của người review (thay bằng mã).
 - Tiêu chí chấm của giảng viên (mục 8) là thước đo thành công.
@@ -72,15 +73,26 @@ Thứ tự ưu tiên: RQ1, RQ2 là bắt buộc; nếu phải cắt, cắt từ 
 - PR merged, ≤ 500 dòng thay đổi trong `.java`, ≥ 2 nhận xét có thể hành động.
 
 ### 5.3 AI review
-- 3 mô hình: bản mạnh hiện hành của Claude, GPT, DeepSeek; ghi tên, phiên bản, ngày chạy. Temperature 0 nếu hỗ trợ.
-- Một prompt chung, đầu ra JSON `{file, line, comment, category}`.
-- **Chạy 3 lần** mỗi (PR, mô hình) ở cấu hình chính để đo độ dao động (xem 5.10.9).
-- Hai cấu hình ngữ cảnh (RQ6): **diff** (chính) và **diff + toàn bộ file đã sửa**.
+Hai điều kiện, chạy bằng công cụ sau:
+
+| Điều kiện | Claude | GPT | DeepSeek |
+|---|---|---|---|
+| **Chỉ đọc diff** (chính; RQ1–RQ5) | Claude Code `claude -p`, **tắt mọi công cụ** | Codex CLI `codex exec`, chạy trong thư mục trống, chế độ chỉ đọc | API |
+| **Agent có ngữ cảnh repo** (RQ6) | Claude Code, chỉ bật công cụ **chỉ đọc**, chạy trên bản checkout repo tại commit được review | Codex CLI, chế độ chỉ đọc, trên bản checkout tương tự | không chạy |
+
+- Cả ba nhận **cùng một prompt** và cùng diff ở điều kiện chính; đầu ra JSON `{file, line, comment, category}`. Ở điều kiện agent, prompt giống hệt, thêm một câu cho phép đọc file trong repo.
+- Ở điều kiện agent, bản checkout **không chứa các commit sau commit được review**, để công cụ không đọc được code đã sửa theo review (chống rò rỉ).
+- **Chạy 3 lần** mỗi (PR, mô hình) ở điều kiện chính để đo độ dao động; điều kiện agent chạy 1 lần (xem 5.10.9). CLI không cho chỉnh temperature; độ dao động được đo thay vì kiểm soát.
+- **Quy tắc tài khoản và phiên bản:**
+  - Một thành viên chạy **toàn bộ** phần Claude bằng gói của mình; một thành viên khác chạy toàn bộ phần Codex. Không chia lượt chạy của cùng một công cụ cho nhiều tài khoản.
+  - Ghim phiên bản CLI và tên mô hình; dùng cấu hình sạch (không có tùy chỉnh, bộ nhớ hay plugin cá nhân).
+  - Script tự ghi vào mỗi kết quả: công cụ, phiên bản CLI, mô hình, cờ dòng lệnh, thời điểm chạy, số token nếu CLI trả về.
+- **Phải kiểm tra trong pilot:** các cờ tắt công cụ, chế độ chỉ đọc và đầu ra JSON của từng CLI hoạt động như mô tả. Nếu Codex CLI không ép được về "chỉ đọc diff", điều kiện chính của GPT chuyển sang API (chi phí nhỏ), điều kiện agent vẫn dùng Codex CLI.
 - Chống rò rỉ: D2 dùng diff từ merge-base tới commit của **vòng review đầu tiên**, chỉ giữ nhận xét người trên commit đó; D1 dùng diff theo commit của AACR-Bench.
 
 ### 5.4 Giám khảo so khớp
 - Ghép góp ý AI với vấn đề tham chiếu (nhận xét người ở D2; vấn đề hợp lệ của chuyên gia ở D1): "cùng nói về một vấn đề, gần vị trí".
-- Giám khảo chính Claude; giám khảo thứ hai GPT trên tập kiểm chứng. Đo đồng thuận giữa hai giám khảo và với nhãn người; kiểm tra thiên vị "chấm họ nhà mình" bằng cách so độ chính xác theo từng mô hình được chấm.
+- Giám khảo chạy qua `claude -p` / `codex exec` (tắt công cụ) hoặc DeepSeek API; mô hình cụ thể chọn sau pilot (5.10.8). Giám khảo thứ hai thuộc **họ mô hình khác** giám khảo chính, chạy trên tập kiểm chứng. Đo đồng thuận giữa hai giám khảo và với nhãn người; kiểm tra thiên vị "chấm họ nhà mình" bằng cách so độ chính xác theo từng mô hình được chấm.
 - **Hiệu chỉnh trên D3:** nếu recall của pipeline trên D3 lệch xa số SWE-PRBench công bố, tìm nguyên nhân trước khi chạy D1, D2.
 
 ### 5.5 Chấm tay của nhóm
@@ -117,7 +129,7 @@ Nhóm chấm ba việc: (a) góp ý *hợp lệ / nhiễu / không đủ thông 
 ### 5.9 Giả thuyết riêng cho Java (đăng ký trước)
 - H1: Recall của AI cao hơn ở `error_handling` và `logic_bug` (null, ngoại lệ, tài nguyên) so với `design_maintainability`.
 - H2: Người review nêu tỉ lệ vấn đề thiết kế cao hơn AI; AI nêu tỉ lệ vấn đề phong cách và kiểm thử cao hơn người (đối chiếu với nhận xét tương tự của c-CRAB trên Python).
-- H3: Thêm toàn bộ file làm tăng số góp ý và tỉ lệ nhiễu, không làm tăng recall (đối chiếu SWE-PRBench).
+- H3: Chế độ agent (tự đọc repo) làm tăng số góp ý và tỉ lệ nhiễu, không làm tăng recall (đối chiếu SWE-PRBench, AACR-Bench).
 
 ### 5.10 Các quyết định chi tiết (Claude chốt, nhóm có thể sửa)
 1. Danh mục loại (cố định trước khi chạy): `logic_bug`, `error_handling`, `performance`, `design_maintainability`, `testing`, `style_naming_docs`; ánh xạ sang 4 loại của AACR-Bench khi so sánh.
@@ -127,15 +139,16 @@ Nhóm chấm ba việc: (a) góp ý *hợp lệ / nhiễu / không đủ thông 
 5. Phân tích chính dùng lần chạy 1; lần 2–3 chỉ dùng cho độ dao động. Hợp các lần chạy báo cáo phụ.
 6. **Khi D2 không đủ PR theo phân tích lực**, nới lần lượt: (a) thêm dự án Java (tối đa ~10); (b) lùi mốc thời gian về sau mốc huấn luyện *sớm nhất* trong 3 mô hình, báo cáo riêng phần PR có thể đã bị mô hình thấy; (c) chấp nhận lực thấp hơn và ghi rõ chênh lệch nhỏ nhất phát hiện được. Không nới tiêu chí lọc nhận xét và PR (5.2).
 7. **Khi giám khảo LLM đạt kappa < 0,6 với người** sau một lần sửa prompt: không chuyển sang so khớp thủ công toàn bộ. Kết quả dựa trên giám khảo được ghi là *thăm dò*; trên tập kiểm chứng, nhãn so khớp của người được dùng làm kết quả chính và báo cáo cạnh kết quả của giám khảo.
-8. **Quyết định hoãn đến sau pilot** (phải chốt *trước* khi đăng ký kế hoạch phân tích): (a) mô hình Claude được đánh giá là Sonnet 5.5 hay Opus 5.5 — pilot chạy cả hai trên ~10 PR, so chất lượng và số token thật; (b) giám khảo là Haiku 5.5 hay Sonnet 5.5 — chọn Haiku chỉ khi đạt kappa ≥ 0,6 với nhãn người trên tập pilot. Cùng nguyên tắc cho bản GPT và DeepSeek.
-9. **Tiết kiệm chi phí API** (không ảnh hưởng kết quả): gửi theo lô qua Batch API của từng hãng khi có; ước tính chi phí từ số token thật của pilot trước khi chạy lớn; chỉ chạy lặp 3 lần cho cấu hình chính (cấu hình kèm toàn bộ file chạy 1 lần); cache phản hồi trên đĩa; cỡ mẫu theo phân tích lực, không lấy dư.
-10. **Hiệu chỉnh trên D3** dùng thêm **một mô hình mà SWE-PRBench đã đánh giá** (ưu tiên Claude Sonnet 4.6 hoặc GPT-4o nếu còn gọi được), chỉ trên các PR thuộc tập đánh giá của họ. Đạt khi recall của nhóm nằm trong khoảng tin cậy họ công bố. Không đạt thì tìm nguyên nhân và ghi vào báo cáo, **không chặn** việc chạy D1, D2.
+8. **Quyết định hoãn đến sau pilot** (phải chốt *trước* khi đăng ký kế hoạch phân tích): (a) mô hình Claude được đánh giá (Sonnet 5.5 hay Opus 5.5, chọn bằng `--model`) và mô hình GPT trong Codex CLI — pilot chạy các phương án trên ~10 PR, so chất lượng và lượt dùng thật; (b) mô hình giám khảo — chọn phương án rẻ hơn về lượt dùng chỉ khi đạt kappa ≥ 0,6 với nhãn người trên tập pilot.
+9. **Tiết kiệm lượt dùng và chi phí** (không ảnh hưởng kết quả): đo số lượt/token mỗi PR từ pilot trước khi chạy lớn; chỉ chạy lặp 3 lần ở điều kiện chính (agent chạy 1 lần); cache phản hồi trên đĩa, không chạy lại thứ đã có; rải lượt chạy theo giới hạn của gói đăng ký; DeepSeek dùng Batch API nếu có; cỡ mẫu theo phân tích lực, không lấy dư.
+10. **Hiệu chỉnh trên D3** dùng thêm **một mô hình mà SWE-PRBench đã đánh giá** (ưu tiên Claude Sonnet 4.6 qua `claude -p --model`; nếu CLI không cho chọn mô hình đó thì gọi API một lần nhỏ cho riêng bước này), chỉ trên các PR thuộc tập đánh giá của họ. Đạt khi recall của nhóm nằm trong khoảng tin cậy họ công bố. Không đạt thì tìm nguyên nhân và ghi vào báo cáo, **không chặn** việc chạy D1, D2.
 
 ### 5.11 Mối đe dọa đến tính hợp lệ
 - *Nội tại:* thiên vị giám khảo LLM; chỉ dùng vòng review đầu; người chấm không phải chuyên gia dự án (giảm bằng hiệu chuẩn với chuyên gia).
 - *Cấu trúc:* "hợp lệ" mang tính chủ quan; độ phủ trên V là tương đối; tập V của D1 thiên về những gì 6 mô hình cũ của AACR-Bench tìm được.
 - *Ngoại tại:* chỉ Java, số dự án hạn chế, một prompt.
-- *Tái lập:* mô hình thương mại thay đổi; D1 có PR từ 12/2024–12/2025 nên có thể đã nằm trong dữ liệu huấn luyện (D2 chọn PR mới để đối chứng).
+- *Công cụ chạy:* Claude và GPT chạy qua CLI (có system prompt riêng của công cụ), DeepSeek qua API thô; chênh lệch giữa mô hình có thể lẫn một phần khác biệt công cụ. Báo cáo nêu rõ và, nếu kinh phí cho phép, chạy một mẫu nhỏ Claude/GPT qua API để ước lượng độ lệch này.
+- *Tái lập:* mô hình thương mại và phiên bản CLI thay đổi (đã ghim và ghi lại); D1 có PR từ 12/2024–12/2025 nên có thể đã nằm trong dữ liệu huấn luyện (D2 chọn PR mới để đối chứng).
 - *So sánh với nghiên cứu trước:* khác dữ liệu, cách lọc, giám khảo; so định tính, trừ D3.
 
 ## 6. Tổ chức nhóm
@@ -143,7 +156,7 @@ Nhóm chấm ba việc: (a) góp ý *hợp lệ / nhiễu / không đủ thông 
 | Vai trò | Phụ trách | Phần báo cáo |
 |---|---|---|
 | Dữ liệu | D1 (xác minh), D2 (thu thập, làm sạch), D3 | Dữ liệu |
-| Pipeline AI | Prompt, review 3 mô hình × 2 cấu hình × 3 lần, giám khảo | Thiết lập thực nghiệm |
+| Pipeline AI | Prompt, script chạy CLI và API, giám khảo; một người giữ tài khoản Claude Code, một người giữ tài khoản Codex chạy toàn bộ phần của công cụ đó | Thiết lập thực nghiệm |
 | Chấm tay | Hướng dẫn chấm, hiệu chuẩn, chia việc, phân xử, kappa | Quy trình gán nhãn |
 | Thống kê | Phân tích lực, kế hoạch đăng ký trước, kiểm định, biểu đồ | Kết quả |
 | Nghiên cứu liên quan | Tổng quan, đối chiếu số liệu gốc, giả thuyết Java | Giới thiệu, Liên quan |
