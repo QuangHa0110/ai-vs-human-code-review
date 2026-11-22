@@ -74,7 +74,7 @@ Thứ tự ưu tiên: RQ1, RQ2 là bắt buộc; nếu phải cắt, cắt từ 
 ### 5.3 AI review
 - 3 mô hình: bản mạnh hiện hành của Claude, GPT, DeepSeek; ghi tên, phiên bản, ngày chạy. Temperature 0 nếu hỗ trợ.
 - Một prompt chung, đầu ra JSON `{file, line, comment, category}`.
-- **Chạy 3 lần** mỗi (PR, mô hình) ở cấu hình chính để đo độ dao động (xem 5.10.10).
+- **Chạy 3 lần** mỗi (PR, mô hình) ở cấu hình chính để đo độ dao động (xem 5.10.9).
 - Hai cấu hình ngữ cảnh (RQ6): **diff** (chính) và **diff + toàn bộ file đã sửa**.
 - Chống rò rỉ: D2 dùng diff từ merge-base tới commit của **vòng review đầu tiên**, chỉ giữ nhận xét người trên commit đó; D1 dùng diff theo commit của AACR-Bench.
 
@@ -127,9 +127,9 @@ Nhóm chấm ba việc: (a) góp ý *hợp lệ / nhiễu / không đủ thông 
 5. Phân tích chính dùng lần chạy 1; lần 2–3 chỉ dùng cho độ dao động. Hợp các lần chạy báo cáo phụ.
 6. **Khi D2 không đủ PR theo phân tích lực**, nới lần lượt: (a) thêm dự án Java (tối đa ~10); (b) lùi mốc thời gian về sau mốc huấn luyện *sớm nhất* trong 3 mô hình, báo cáo riêng phần PR có thể đã bị mô hình thấy; (c) chấp nhận lực thấp hơn và ghi rõ chênh lệch nhỏ nhất phát hiện được. Không nới tiêu chí lọc nhận xét và PR (5.2).
 7. **Khi giám khảo LLM đạt kappa < 0,6 với người** sau một lần sửa prompt: không chuyển sang so khớp thủ công toàn bộ. Kết quả dựa trên giám khảo được ghi là *thăm dò*; trên tập kiểm chứng, nhãn so khớp của người được dùng làm kết quả chính và báo cáo cạnh kết quả của giám khảo.
-9. **Quyết định hoãn đến sau pilot** (phải chốt *trước* khi đăng ký kế hoạch phân tích): (a) mô hình Claude được đánh giá là Sonnet 5.5 hay Opus 5.5 — pilot chạy cả hai trên ~10 PR, so chất lượng và số token thật; (b) giám khảo là Haiku 5.5 hay Sonnet 5.5 — chọn Haiku chỉ khi đạt kappa ≥ 0,6 với nhãn người trên tập pilot. Cùng nguyên tắc cho bản GPT và DeepSeek.
-10. **Tiết kiệm chi phí API** (không ảnh hưởng kết quả): gửi theo lô qua Batch API của từng hãng khi có; ước tính chi phí từ số token thật của pilot trước khi chạy lớn; chỉ chạy lặp 3 lần cho cấu hình chính (cấu hình kèm toàn bộ file chạy 1 lần); cache phản hồi trên đĩa; cỡ mẫu theo phân tích lực, không lấy dư.
-8. **Hiệu chỉnh trên D3** dùng thêm **một mô hình mà SWE-PRBench đã đánh giá** (ưu tiên Claude Sonnet 4.6 hoặc GPT-4o nếu còn gọi được), chỉ trên các PR thuộc tập đánh giá của họ. Đạt khi recall của nhóm nằm trong khoảng tin cậy họ công bố. Không đạt thì tìm nguyên nhân và ghi vào báo cáo, **không chặn** việc chạy D1, D2.
+8. **Quyết định hoãn đến sau pilot** (phải chốt *trước* khi đăng ký kế hoạch phân tích): (a) mô hình Claude được đánh giá là Sonnet 5.5 hay Opus 5.5 — pilot chạy cả hai trên ~10 PR, so chất lượng và số token thật; (b) giám khảo là Haiku 5.5 hay Sonnet 5.5 — chọn Haiku chỉ khi đạt kappa ≥ 0,6 với nhãn người trên tập pilot. Cùng nguyên tắc cho bản GPT và DeepSeek.
+9. **Tiết kiệm chi phí API** (không ảnh hưởng kết quả): gửi theo lô qua Batch API của từng hãng khi có; ước tính chi phí từ số token thật của pilot trước khi chạy lớn; chỉ chạy lặp 3 lần cho cấu hình chính (cấu hình kèm toàn bộ file chạy 1 lần); cache phản hồi trên đĩa; cỡ mẫu theo phân tích lực, không lấy dư.
+10. **Hiệu chỉnh trên D3** dùng thêm **một mô hình mà SWE-PRBench đã đánh giá** (ưu tiên Claude Sonnet 4.6 hoặc GPT-4o nếu còn gọi được), chỉ trên các PR thuộc tập đánh giá của họ. Đạt khi recall của nhóm nằm trong khoảng tin cậy họ công bố. Không đạt thì tìm nguyên nhân và ghi vào báo cáo, **không chặn** việc chạy D1, D2.
 
 ### 5.11 Mối đe dọa đến tính hợp lệ
 - *Nội tại:* thiên vị giám khảo LLM; chỉ dùng vòng review đầu; người chấm không phải chuyên gia dự án (giảm bằng hiệu chuẩn với chuyên gia).
