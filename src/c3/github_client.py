@@ -19,8 +19,15 @@ class GitHubClient:
 
     def __init__(self, token: str, http: httpx.Client | None = None, sleep=time.sleep):
         self._http = http if http is not None else httpx.Client(timeout=30)
+        self._owns_http = http is None
         self._sleep = sleep
-        self._headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+        self._headers = {"Accept": "application/vnd.github+json"}
+        if token:
+            self._headers["Authorization"] = f"Bearer {token}"
+
+    def close(self) -> None:
+        if self._owns_http:
+            self._http.close()
 
     def _get(self, url: str, *, params=None, accept=None) -> httpx.Response:
         target = httpx.URL(url)
@@ -90,6 +97,23 @@ class GitHubClient:
         for response in self._pages(f"{self._API}/repos/{repo}/pulls/{number}/comments", {"per_page": 100}):
             comments.extend(response.json())
         return comments
+
+    def first_parent(self, repo: str, sha: str) -> str:
+        commit = self._get(f"{self._API}/repos/{repo}/git/commits/{quote(sha, safe='')}").json()
+        parents = commit.get("parents") or []
+        if not parents or not parents[0].get("sha"):
+            raise ValueError(f"Missing first parent for {repo}@{sha}")
+        return parents[0]["sha"]
+
+    def merge_base(self, repo: str, base: str, head: str) -> str:
+        refs = f"{quote(base, safe='')}...{quote(head, safe='')}"
+        comparison = self._get(
+            f"{self._API}/repos/{repo}/compare/{refs}", params={"per_page": 1},
+        ).json()
+        merge_base = (comparison.get("merge_base_commit") or {}).get("sha")
+        if not merge_base:
+            raise ValueError(f"Missing merge base for {repo} {base}...{head}")
+        return merge_base
 
     def compare_diff(self, repo: str, base: str, head: str) -> str:
         refs = f"{quote(base, safe='')}...{quote(head, safe='')}"
