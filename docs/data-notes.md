@@ -61,6 +61,45 @@ manual checking before publication. Run `python -m pytest -m data` against
 the local pinned files to validate the reference counts. Set
 `C3_AACR_V1_DIR` to use another local directory.
 
+## D3 — SWE-PRBench external calibration
+
+Use the Hugging Face dataset at revision `b87f5797aef3ed2c3153bb1304ea4d801d36ba6e`.
+Keep the upstream directory layout under `data/raw/swe-prbench/dataset/`.
+The evaluated file `evals/eval_100.json` contains 100 full PR records,
+including three Java and 67 Python PRs. The full `prs.jsonl` contains 350 PRs,
+including 15 Java PRs. When importing the full file with the evaluated file
+available, the CLI matches `task_id` values and checks that each selected
+evaluated record has the same repository, PR number, commits and diff.
+[Evaluated split](https://huggingface.co/datasets/foundry-ai/swe-prbench/resolve/b87f5797aef3ed2c3153bb1304ea4d801d36ba6e/dataset/evals/eval_100.json),
+[full PR file](https://huggingface.co/datasets/foundry-ai/swe-prbench/resolve/b87f5797aef3ed2c3153bb1304ea4d801d36ba6e/dataset/prs.jsonl).
+
+The loader preserves `diff_patch`, `base_commit` and `head_commit`. It takes
+references from `substantive_comment_ids` and `comments` in each selected
+`annotations/{task_id}_human.json`. A retained reference is a substantive
+initiating comment on the diff with a positive line number. The manifest
+counts substantive replies, out-of-diff comments and missing lines that the
+filter removes. It also lists selected PRs with no remaining references.
+Report the retained denominator for calibration comparisons because this filter
+can change the upstream reference set. [Nessie annotation example](https://huggingface.co/datasets/foundry-ai/swe-prbench/resolve/b87f5797aef3ed2c3153bb1304ea4d801d36ba6e/dataset/annotations/nessie__11676_human.json).
+
+Set `C3_ANONYMIZATION_SALT` in the environment before importing. The example
+keeps all evaluated Java PRs and requests a Python sample of 10. Sampling uses
+`C3_SEED` and sorted task IDs. Set the sample size for the calibration run.
+
+```bash
+python -m c3 load-swepr \
+  --path data/raw/swe-prbench/dataset/evals/eval_100.json \
+  --languages Java,Python --python-sample 10
+```
+
+The local import writes PR records and `_meta.json` under `data/prs/D3/`.
+The destination must be absent or empty. The manifest records source hashes,
+selected task membership, sampling parameters and reference counts. The CLI
+pseudonymizes GitHub-style mentions in exported references. Use
+`--include-unevaluated` with `prs.jsonl` to broaden the cohort when exploring
+the full dataset. If the evaluated file is unavailable in that mode, the
+manifest records membership as unknown.
+
 ## CLI
 
 Inspected locally on 2026-11-24 without inference: `claude --version`,

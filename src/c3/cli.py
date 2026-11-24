@@ -17,10 +17,27 @@ from c3.aacr import load_aacr_with_audit, summary as aacr_summary
 from c3.config import load_settings
 from c3.diffutil import filter_java
 from c3.github_client import GitHubClient
-from c3.models import load_pr, save_json
+from c3.models import PullRequest, load_pr, save_json
 from c3.select import anonymize, assess_candidate, sample_prs
+from c3.swepr import load_swepr_with_audit
 
 _REPO = re.compile(r"[A-Za-z0-9-]+/[A-Za-z0-9_.-]+")
+
+
+def _check_import_output(output: Path) -> None:
+    if output.is_symlink() or (output.exists() and (not output.is_dir() or any(output.iterdir()))):
+        raise ValueError(f"{output.name} output is already occupied. Choose a new C3_DATA_DIR.")
+
+
+def _publish_import(output: Path, prs: list[PullRequest], audit: dict) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix=f".{output.name}-", dir=output.parent) as temporary:
+        staged = Path(temporary) / output.name
+        for pr in prs:
+            save_json(pr, staged / f"{pr.pr_id.replace('/', '__')}.json")
+        save_json(audit, staged / "_meta.json")
+        _check_import_output(output)
+        staged.rename(output)
 
 
 def _load_aacr(args: argparse.Namespace) -> int:
@@ -29,8 +46,7 @@ def _load_aacr(args: argparse.Namespace) -> int:
         raise ValueError("Set C3_ANONYMIZATION_SALT in the environment before loading D1")
     settings = load_settings()
     output = settings.data_dir / "prs" / "D1"
-    if output.is_symlink() or (output.exists() and (not output.is_dir() or any(output.iterdir()))):
-        raise ValueError("D1 output is already occupied. Choose a new C3_DATA_DIR.")
+    _check_import_output(output)
 
     prs, audit = load_aacr_with_audit(args.positive, args.negative)
     prs, _ = anonymize(prs, salt)
@@ -46,13 +62,23 @@ def _load_aacr(args: argparse.Namespace) -> int:
     finally:
         github.close()
 
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with TemporaryDirectory(prefix=".D1-", dir=output.parent) as temporary:
-        staged = Path(temporary) / "D1"
-        for pr in prs:
-            save_json(pr, staged / f"{pr.pr_id.replace('/', '__')}.json")
-        save_json({**audit, "evaluation": aacr_summary(prs)}, staged / "_meta.json")
-        staged.rename(output)
+    _publish_import(output, prs, {**audit, "evaluation": aacr_summary(prs)})
+    return 0
+
+
+def _load_swepr(args: argparse.Namespace) -> int:
+    salt = os.environ.get("C3_ANONYMIZATION_SALT")
+    if not salt or not salt.strip():
+        raise ValueError("Set C3_ANONYMIZATION_SALT in the environment before loading D3")
+    settings = load_settings()
+    output = settings.data_dir / "prs" / "D3"
+    _check_import_output(output)
+    prs, audit = load_swepr_with_audit(
+        args.path, {language.strip() for language in args.languages.split(",")},
+        args.python_sample, settings.seed, evaluated_only=not args.include_unevaluated,
+    )
+    sanitized, _ = anonymize(prs, salt)
+    _publish_import(output, sanitized, audit)
     return 0
 
 
@@ -159,6 +185,12 @@ def main(argv: list[str] | None = None) -> int:
     aacr.add_argument("--positive", required=True, type=Path)
     aacr.add_argument("--negative", required=True, type=Path)
     aacr.set_defaults(run=_load_aacr)
+    swepr = commands.add_parser("load-swepr", help="Load local SWE-PRBench PRs into D3")
+    swepr.add_argument("--path", required=True, type=Path, help="Path to evals/eval_100.json or prs.jsonl")
+    swepr.add_argument("--languages", default="Java,Python", help="Comma-separated dataset language names")
+    swepr.add_argument("--python-sample", required=True, type=int, help="Maximum number of Python PRs to sample")
+    swepr.add_argument("--include-unevaluated", action="store_true", help="Allow records outside the evaluated split")
+    swepr.set_defaults(run=_load_swepr)
     collect = commands.add_parser("collect", help="Collect anonymized D2 PRs")
     collect.add_argument("--repos", required=True, help="Comma-separated owner/repo names")
     collect.add_argument("--since", required=True, type=date.fromisoformat)
