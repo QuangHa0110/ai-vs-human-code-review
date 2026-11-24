@@ -14,10 +14,12 @@ from tempfile import TemporaryDirectory
 import httpx
 
 from c3.aacr import load_aacr_with_audit, summary as aacr_summary
+from c3.classify import classify_references, keep_actionable
 from c3.config import load_settings
 from c3.diffutil import filter_java
 from c3.github_client import GitHubClient
 from c3.models import PullRequest, load_pr, save_json
+from c3.runners import make_runner
 from c3.select import anonymize, assess_candidate, sample_prs
 from c3.swepr import load_swepr_with_audit
 
@@ -178,6 +180,65 @@ def _collect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _classify(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    source = settings.data_dir / "prs" / args.dataset
+    output = settings.data_dir / "classified" / args.dataset
+    _check_import_output(output)
+    files = sorted(path for path in source.glob("*.json") if path.name != "_meta.json")
+    if not files:
+        raise ValueError(f"No PR records found in {source}")
+    spec = settings.reviewers.get(args.reviewer)
+    if spec is None:
+        raise ValueError(f"Unknown reviewer {args.reviewer!r}")
+
+    prs = []
+    filenames = {"_meta.json"}
+    for path in files:
+        try:
+            pr = load_pr(path)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid PR record in {path}") from exc
+        if pr.dataset != args.dataset:
+            raise ValueError(f"Expected dataset {args.dataset} in {path}, got {pr.dataset!r}")
+        filename = f"{pr.pr_id.replace('/', '__')}.json"
+        if filename in filenames:
+            raise ValueError(f"Duplicate or reserved PR output filename: {filename}")
+        filenames.add(filename)
+        prs.append(pr)
+
+    runner = make_runner(args.reviewer, settings)
+    retained = []
+    dropped = 0
+    for pr in prs:
+        try:
+            classified = classify_references(runner, pr)
+        except ValueError as exc:
+            raise ValueError(f"{args.dataset} classification failed for {pr.pr_id} "
+                             f"(1 error, {dropped} dropped so far): {exc}") from exc
+        if pr.dataset == "D2":
+            classified = keep_actionable(classified)
+        if classified is None:
+            dropped += 1
+        else:
+            retained.append(classified)
+    if not retained:
+        raise ValueError(f"No {args.dataset} PRs retained after classification ({dropped} dropped)")
+
+    _publish_import(output, retained, {
+        "dataset": args.dataset,
+        "reviewer": args.reviewer,
+        "backend": spec.backend,
+        "model": spec.model,
+        "input_pr_count": len(prs),
+        "retained_pr_count": len(retained),
+        "dropped_pr_count": dropped,
+        "error_count": 0,
+        "retained_pr_ids": [pr.pr_id for pr in retained],
+    })
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="c3", description="C3 code review research pipeline")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -197,6 +258,10 @@ def main(argv: list[str] | None = None) -> int:
     collect.add_argument("--until", required=True, type=date.fromisoformat)
     collect.add_argument("--n-per-repo", required=True, type=int)
     collect.set_defaults(run=_collect)
+    classify = commands.add_parser("classify", help="Classify human references from prs/ into classified/")
+    classify.add_argument("--dataset", required=True, choices=("D1", "D2", "D3"))
+    classify.add_argument("--reviewer", required=True, help="Configured reviewer with tools disabled")
+    classify.set_defaults(run=_classify)
     args = parser.parse_args(argv)
     try:
         return args.run(args)

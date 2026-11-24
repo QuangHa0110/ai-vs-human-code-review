@@ -100,6 +100,20 @@ pseudonymizes GitHub-style mentions in exported references. Use
 the full dataset. If the evaluated file is unavailable in that mode, the
 manifest records membership as unknown.
 
+## Human reference classification
+
+Run `python -m c3 classify --dataset D2 --reviewer claude` with an explicit
+model for the selected reviewer. The classifier uses one tool-free call per
+PR with human references. The command reads `data/prs/D2/` and publishes the
+retained PRs and counts under `data/classified/D2/` after all PRs succeed.
+An occupied destination or a run with no retained PRs fails.
+
+D2 keeps actionable human references and requires at least two per PR. D1 and
+D3 retain every imported reference to preserve the expert and calibration
+evaluation sets. Classification adds actionability and category labels to
+human references while preserving their original validity labels. AI references
+keep their imported fields in every dataset.
+
 ## CLI
 
 Inspected locally on 2026-11-24 without inference: `claude --version`,
