@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "c3-code-review"
+version = "0.1.0"
+description = "Reproducible AI and human code review research pipeline"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx", "openai", "numpy", "pandas", "scipy", "statsmodels",
+    "scikit-learn", "matplotlib", "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
