@@ -12,6 +12,9 @@ venv/
 *.egg-info/
 build/
 dist/
+# Downloaded sources and generated PR exports require publication review.
+data/raw/
+data/prs/
 .ipynb_checkpoints/
 
 # Editor / OS

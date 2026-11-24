@@ -1,0 +1,12 @@
+[
+  {
+    "project_main_language": "Java",
+    "githubPrUrl": "https://github.com/acme/example/pull/8",
+    "source_commit": "1111111111111111111111111111111111111111",
+    "target_commit": "2222222222222222222222222222222222222222",
+    "comments": [
+      {"note": "@sample-reviewer asked to remove validation.", "path": "Example.java", "from_line": 7, "to_line": 7, "side": "right", "is_ai_comment": true, "category": "Code Defect", "context": "Hunk Level", "source_model": "Example-model"},
+      {"note": "The loop should take constant time.", "path": "Example.java", "from_line": 7, "to_line": 7, "side": "right", "is_ai_comment": false, "category": "Performance", "context": "File Level", "source_model": ""}
+    ]
+  }
+]

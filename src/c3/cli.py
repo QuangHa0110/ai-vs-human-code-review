@@ -6,17 +6,54 @@ from datetime import date
 from hashlib import sha256
 import json
 import os
+from pathlib import Path
 import re
 import sys
+from tempfile import TemporaryDirectory
 
 import httpx
 
+from c3.aacr import load_aacr_with_audit, summary as aacr_summary
 from c3.config import load_settings
+from c3.diffutil import filter_java
 from c3.github_client import GitHubClient
 from c3.models import load_pr, save_json
 from c3.select import anonymize, assess_candidate, sample_prs
 
 _REPO = re.compile(r"[A-Za-z0-9-]+/[A-Za-z0-9_.-]+")
+
+
+def _load_aacr(args: argparse.Namespace) -> int:
+    salt = os.environ.get("C3_ANONYMIZATION_SALT")
+    if not salt or not salt.strip():
+        raise ValueError("Set C3_ANONYMIZATION_SALT in the environment before loading D1")
+    settings = load_settings()
+    output = settings.data_dir / "prs" / "D1"
+    if output.is_symlink() or (output.exists() and (not output.is_dir() or any(output.iterdir()))):
+        raise ValueError("D1 output is already occupied. Choose a new C3_DATA_DIR.")
+
+    prs, audit = load_aacr_with_audit(args.positive, args.negative)
+    prs, _ = anonymize(prs, salt)
+    github = GitHubClient(settings.github_token or "")
+    try:
+        for pr in prs:
+            diff = github.compare_diff(pr.repo, pr.base_sha, pr.review_sha)
+            pr.diff = filter_java(diff)
+            if not pr.diff:
+                raise ValueError(f"No Java diff for {pr.pr_id} at its AACR commits")
+    except httpx.HTTPError as exc:
+        raise ValueError(f"GitHub comparison failed: {exc}") from exc
+    finally:
+        github.close()
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix=".D1-", dir=output.parent) as temporary:
+        staged = Path(temporary) / "D1"
+        for pr in prs:
+            save_json(pr, staged / f"{pr.pr_id.replace('/', '__')}.json")
+        save_json({**audit, "evaluation": aacr_summary(prs)}, staged / "_meta.json")
+        staged.rename(output)
+    return 0
 
 
 def _collect(args: argparse.Namespace) -> int:
@@ -118,6 +155,10 @@ def _collect(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="c3", description="C3 code review research pipeline")
     commands = parser.add_subparsers(dest="command", required=True)
+    aacr = commands.add_parser("load-aacr", help="Load AACR-Bench v1 Java PRs into D1")
+    aacr.add_argument("--positive", required=True, type=Path)
+    aacr.add_argument("--negative", required=True, type=Path)
+    aacr.set_defaults(run=_load_aacr)
     collect = commands.add_parser("collect", help="Collect anonymized D2 PRs")
     collect.add_argument("--repos", required=True, help="Comma-separated owner/repo names")
     collect.add_argument("--since", required=True, type=date.fromisoformat)

@@ -1,0 +1,32 @@
+[
+  {
+    "project_main_language": "Java",
+    "githubPrUrl": "https://github.com/acme/example/pull/8",
+    "source_commit": "1111111111111111111111111111111111111111",
+    "target_commit": "2222222222222222222222222222222222222222",
+    "comments": [
+      {"note": "Guard against null before taking the length.", "path": "Example.java", "from_line": 5, "to_line": 7, "side": "right", "is_ai_comment": false, "category": "Code Defect", "context": "File Level", "source_model": ""},
+      {"note": "Old side finding.", "path": "Example.java", "from_line": 2, "to_line": 2, "side": "left", "is_ai_comment": false, "category": "Code Defect", "context": "Hunk Level", "source_model": ""},
+      {"note": "Build script finding.", "path": "build.gradle", "from_line": 3, "to_line": 3, "side": "right", "is_ai_comment": true, "category": "Code Defect", "context": "File Level", "source_model": "Example-model"},
+      {"note": "General note.", "path": "Example.java", "from_line": null, "to_line": null, "side": "right", "is_ai_comment": true, "category": "Maintainability", "context": "File Level", "source_model": "Example-model"}
+    ]
+  },
+  {
+    "project_main_language": "Java",
+    "githubPrUrl": "https://github.com/acme/other/pull/9",
+    "source_commit": "3333333333333333333333333333333333333333",
+    "target_commit": "4444444444444444444444444444444444444444",
+    "comments": [
+      {"note": "Cache the result used by every iteration.", "path": "Example.java", "from_line": 7, "to_line": 7, "side": "RIGHT", "is_ai_comment": true, "category": "Performance", "context": "File Level", "source_model": "Example-model"}
+    ]
+  },
+  {
+    "project_main_language": "Python",
+    "githubPrUrl": "https://github.com/acme/python/pull/10",
+    "source_commit": "5555555555555555555555555555555555555555",
+    "target_commit": "6666666666666666666666666666666666666666",
+    "comments": [
+      {"note": "Handle an empty list.", "path": "example.py", "from_line": 7, "to_line": 7, "side": "right", "is_ai_comment": false, "category": "Code Defect", "context": "Hunk Level", "source_model": ""}
+    ]
+  }
+]
