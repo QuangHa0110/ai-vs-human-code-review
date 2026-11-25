@@ -31,6 +31,7 @@ from c3.judge import build_judge_prompt, judge_pr, validation_subset
 from c3.models import AiComment, CATEGORIES, PullRequest, load_pr, save_json
 from c3.power import mcnemar_n, required_prs
 from c3.review import ReviewResult, build_review_prompt, run_review
+from c3.report import analyze as analyze_report
 from c3.runners import CachedRunner, make_runner
 from c3.select import anonymize, assess_candidate, sample_prs
 from c3.swepr import load_swepr_with_audit
@@ -641,6 +642,13 @@ def _power(args: argparse.Namespace) -> int:
     return 0
 
 
+def _analyze(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    outputs = analyze_report(settings, args.labels_dir)
+    print(json.dumps({name: str(path) for name, path in outputs.items()}, ensure_ascii=False))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="c3", description="C3 code review research pipeline")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -685,6 +693,9 @@ def main(argv: list[str] | None = None) -> int:
     power.add_argument("--delta", type=float, default=0.10)
     power.add_argument("--target-power", type=float, default=0.8)
     power.set_defaults(run=_power)
+    report = commands.add_parser("analyze", help="Analyze saved reviews and judgments")
+    report.add_argument("--labels-dir", type=Path, help="Optional directory containing adjudicated_labels.json")
+    report.set_defaults(run=_analyze)
     args = parser.parse_args(argv)
     try:
         return args.run(args)

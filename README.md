@@ -1,31 +1,55 @@
-# AI review mã so với người review
+# AI review compared with human code review
 
-Đề tài **C3** — Chuyên đề 1, thạc sỹ Khoa học Máy tính. Nghiên cứu thực nghiệm trên pull request của các dự án Java mã nguồn mở.
+C3 is a research pipeline for measuring how AI code review compares with human review on Java pull requests. The design and research questions are described in [the study design](docs/specs/2026-11-21-c3-ai-code-review-design.md); dataset provenance and limits are in [data notes](docs/data-notes.md).
 
-> **Trạng thái (2026-11-22):** đã có thiết kế (bản 3) và kế hoạch triển khai, **chưa có code**. Đang chờ cả nhóm review tài liệu.
+## Setup
 
-## Đề tài trong một đoạn
+Requires Python 3.11 or newer. Create an environment and install the project:
 
-Đề bài: *chạy công cụ AI review trên các pull request đã có nhận xét của người; đo mức trùng khớp và tỉ lệ cảnh báo nhiễu.* Nhóm cho ba mô hình (Claude qua Claude Code CLI, GPT qua Codex CLI, DeepSeek qua API) review các PR Java, so góp ý của AI với nhận xét của người review gốc, và đo cả hai phía: AI bắt lại được bao nhiêu vấn đề người đã nêu, bao nhiêu góp ý của AI là nhiễu, và người review bỏ sót bao nhiêu vấn đề hợp lệ mà AI tìm ra. Nhãn cốt lõi lấy từ AACR-Bench (do 80 kỹ sư xác minh); nhóm tự chấm phần còn lại sau khi hiệu chuẩn với nhãn chuyên gia.
+```sh
+uv sync --extra dev
+cp .env.example .env
+```
 
-## Tài liệu cần đọc (theo thứ tự)
+Edit `.env` for the local run. Keep all tokens and keys private; `.env` is ignored by Git. `GITHUB_TOKEN` is used for dataset collection/import. `DEEPSEEK_API_KEY` is only needed for DeepSeek API reviews. `OPENAI_API_KEY` is needed only if GPT is explicitly configured for the API backend. Configure `C3_DATA_DIR` and `C3_RESULTS_DIR` to select local data and report locations.
 
-1. **[Thiết kế](docs/specs/2026-11-21-c3-ai-code-review-design.md)** — câu hỏi nghiên cứu (RQ1–RQ6), ba bộ dữ liệu D1/D2/D3, cách chạy AI, chấm tay, thống kê, mối đe dọa đến tính hợp lệ, đối chiếu tiêu chí chấm của thầy.
-2. **[Nghiên cứu liên quan](docs/related-work.md)** — SWE-PRBench, SWR-Bench, AACR-Bench, c-CRAB, CRJudgeBench… và khoảng trống đề tài lấp.
-3. **[Kế hoạch triển khai](docs/superpowers/plans/2026-11-22-c3-pipeline.md)** — 14 task code, mỗi task có test; cuối file là phần việc của nhóm (không phải code).
+Pin model identifiers only after the pilot. The repository intentionally does not select a model version or claim a model has been chosen. `C3_GPT_BACKEND=codex_cli` is the default. Codex CLI does not currently support the pipeline's diff-only preflight, so GPT diff-only reviews need the explicit `C3_GPT_BACKEND=openai_api` fallback and an `OPENAI_API_KEY`. The OpenAI API fallback has no selected model until the pilot settles that choice. Do not run inference until the reviewer/backend/model and read-only constraints have been agreed.
 
-## Khi review, mọi người chú ý giúp
+Check the local command interface without invoking a model:
 
-- **Mục 5.10 của thiết kế** — các quyết định chi tiết đang được chốt thay nhóm (tiêu chí "hợp lệ", ngưỡng kappa, cách nới khi thiếu dữ liệu, lựa chọn mô hình hoãn đến sau pilot…). Đồng ý hay không?
-- **Mục 5.3** — chạy Claude/GPT bằng **gói đăng ký CLI** của thành viên: ai có Claude Code, ai có Codex, ai sẽ giữ tài khoản chạy cho từng công cụ?
-- **Mục 5.5** — chấm tay: mỗi người khoảng 15–20 giờ (ước tính); có kịp không?
-- **Mục 6** — phân vai: mỗi người nhận vai nào.
-- **Mục 8** — thiết kế đã đáp ứng tiêu chí chấm của thầy chưa.
+```sh
+uv run c3 --help
+uv run c3 analyze --help
+```
 
-Góp ý bằng cách **mở Issue** hoặc **comment trên commit/file** trong GitHub. Muốn push code thì gửi username GitHub để được thêm làm collaborator.
+## Pipeline
 
-## Quy ước
+The usual sequence is:
 
-- Không push thẳng vào `main`: mỗi task một nhánh, mở pull request, một người khác duyệt.
-- **Không bao giờ commit khóa API hay token** (file `.env` đã nằm trong `.gitignore`). Repo này công khai.
-- Dữ liệu công bố phải ẩn danh tên người dùng GitHub của người review.
+1. Import/collect data: `load-aacr`, `load-swepr`, and `collect` for D1, D3, and D2.
+2. Classify references with `classify`.
+3. Run `review` for each selected reviewer, mode, and run.
+4. Match saved reviews with `judge`.
+5. Plan sample size with `power` from pilot estimates.
+6. Complete the separately coordinated manual annotation and adjudication work.
+7. Generate tables with `analyze`.
+
+The end-to-end commands are documented in `uv run c3 <command> --help`. Review model selection, account ownership, and who runs each subscription-backed CLI with the research group before inference. The current experiment has no selected model version, and Task13 manual annotation remains deferred.
+
+## Reporting
+
+Run:
+
+```sh
+uv run c3 analyze
+```
+
+Reports are written under `C3_RESULTS_DIR` (default `results/`). `rq1_rq2.csv` contains PR-bootstrap intervals for recall and mismatch rate plus explicit run-error, parse-error, and missing-artifact counts. The other tables cover reviewer comparisons, run variability, categories, pooled D1 coverage, paired diff/agent context, agreement, and D3 calibration. RQ6 reports paired mean changes in comment count and mismatch rate. With complete labels for both modes, noise change is the mean same-PR delta with a seeded PR-bootstrap interval; pairs with zero comments in either mode are excluded and counted in `noise_status`. A recall PNG is created when finite recall data exists. Generated reports are local outputs and are ignored by Git.
+
+No hand judgments are currently present. Consequently, the report leaves `true_noise_share`, `missed_by_human_share`, and `adjusted_precision` blank with a label status; it does not infer labels from unmatched comments. Pooled RQ5 uses the valid D1 references as a baseline and marks that it has no adjudicated new-issue clusters. Human precision is reported only when D1 contains verified negative examples. D3 calibration stays unavailable until a benchmark confidence interval is supplied.
+
+When adjudications are ready, `--labels-dir DIR` accepts `DIR/adjudicated_labels.json` with schema `c3-adjudication-v1`. Each `items` entry must contain `dataset`, `pr_id`, `reviewer`, `mode`, `run_idx`, `ai_index`, `review_fingerprint`, `label` (`valid` or `noise`), and boolean `missed_by_human`. Entries must cover every comment for the selected dataset/reviewer/mode group and match saved review fingerprints. Every valid D1 comment unmatched to expert references must have a nonempty `issue_id`; it groups the same novel issue across reviewers. An `issue_id` is rejected if the corresponding judgment matched that AI comment to an expert reference. RQ5 uses only complete, fingerprint-bound D1 `run1`/`diff` labels to add issue clusters; absent, partial, or missing-`issue_id` labels leave the pool `baseline_only`. Optional `d3_benchmark_ci` maps a reviewer to supplied `recall_low` and `recall_high` bounds; no bounds are inferred. Partial, malformed, or stale labels are reported as unavailable.
+
+## Repository conventions
+
+Do not commit API keys, tokens, downloaded PR data, or local reports. Use a task branch and have another person review changes before merging. Dataset publication requires an anonymization review.

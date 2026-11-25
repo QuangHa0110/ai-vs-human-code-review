@@ -20,7 +20,7 @@ Không chạy thí nghiệm chính trước khi pilot chốt mô hình và cấu
 | 11 | Chỉ số, tập gộp, độ dao động | `task11_metrics_light` (GPT-6 Luna) | Qua review đặc tả và chất lượng |
 | 12 | Kiểm định, phân tích lực | `task12_stats_light` (GPT-6 Luna) | Qua review đặc tả và chất lượng |
 | 13 | Công cụ chấm tay | Để sau theo yêu cầu | Hoãn |
-| 14 | Tích hợp CLI, xuất báo cáo, hướng dẫn | Chưa giao | Chờ các module |
+| 14 | Tích hợp CLI, xuất báo cáo, hướng dẫn | `task14_report_light` (GPT-6 Luna) | Qua review đặc tả và chất lượng; task 13 vẫn hoãn |
 
 ## Kiểm soát triển khai
 
@@ -69,3 +69,5 @@ Task 10 đã qua hai vòng review; hồi quy chặn judgment cũ trên review l�
 Task 11 qua hai vòng review; thêm guard ID tham chiếu trùng trong cùng PR. Full suite: 235 passed, 1 skipped.
 
 Task 12 qua hai vòng review; có kiểm định tham chiếu và phép hoán vị theo PR. Full suite: 252 passed, 1 skipped. Cỡ mẫu chờ tham số pilot thật.
+
+Task 14 qua hai vòng review. Báo cáo dùng nhãn tùy chọn cho RQ5/RQ6 và khoảng tin cậy RQ6 bootstrap theo PR; khi chưa có nhãn, ghi trạng thái chưa khả dụng. Full suite: 260 passed, 1 skipped. Chưa chạy AI thật.

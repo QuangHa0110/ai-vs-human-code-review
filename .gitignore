@@ -19,6 +19,7 @@ data/classified/
 data/reviews/
 data/judgments/
 data/cache/
+results/
 .ipynb_checkpoints/
 
 # Editor / OS
