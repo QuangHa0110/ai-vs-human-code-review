@@ -29,6 +29,7 @@ from c3.diffutil import filter_java
 from c3.github_client import GitHubClient
 from c3.judge import build_judge_prompt, judge_pr, validation_subset
 from c3.models import AiComment, CATEGORIES, PullRequest, load_pr, save_json
+from c3.power import mcnemar_n, required_prs
 from c3.review import ReviewResult, build_review_prompt, run_review
 from c3.runners import CachedRunner, make_runner
 from c3.select import anonymize, assess_candidate, sample_prs
@@ -610,6 +611,36 @@ def _judge(args: argparse.Namespace) -> int:
     return 0
 
 
+def _power(args: argparse.Namespace) -> int:
+    """Plan sample size from user-supplied pilot estimates; do not infer a pilot."""
+    settings = load_settings()
+    pilot = {"p_discordant": args.p_discordant,
+             "refs_per_pr": args.refs_per_pr,
+             "design_effect": args.design_effect}
+    alpha, delta, target_power = 0.05 / 3, args.delta, args.target_power
+    n_refs = mcnemar_n(pilot["p_discordant"], delta, alpha, target_power)
+    n_prs = required_prs(n_refs, pilot["refs_per_pr"], pilot["design_effect"])
+    record = {
+        "pilot": pilot,
+        "assumptions": {"alpha": alpha, "delta": delta, "power": target_power,
+                        "multiplicity": "Bonferroni alpha=0.05/3 for three pairwise comparisons"},
+        "n_refs": n_refs,
+        "n_prs": n_prs,
+    }
+    output = settings.results_dir / "power.json"
+    if output.exists():
+        try:
+            old = json.loads(output.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"Cannot resume invalid power plan {output}") from exc
+        if old != record:
+            raise ValueError("results/power.json contains a different power plan; choose a new C3_RESULTS_DIR")
+        return 0
+    _atomic_record(record, output)
+    print(json.dumps({"n_refs": n_refs, "n_prs": n_prs}))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="c3", description="C3 code review research pipeline")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -647,6 +678,13 @@ def main(argv: list[str] | None = None) -> int:
     judge.add_argument("--run", dest="run_idx", required=True, type=int)
     judge.add_argument("--validation-only", action="store_true")
     judge.set_defaults(run=_judge)
+    power = commands.add_parser("power", help="Plan paired sample size from pilot estimates")
+    power.add_argument("--p-discordant", type=float, required=True)
+    power.add_argument("--refs-per-pr", type=float, required=True)
+    power.add_argument("--design-effect", type=float, required=True)
+    power.add_argument("--delta", type=float, default=0.10)
+    power.add_argument("--target-power", type=float, default=0.8)
+    power.set_defaults(run=_power)
     args = parser.parse_args(argv)
     try:
         return args.run(args)
