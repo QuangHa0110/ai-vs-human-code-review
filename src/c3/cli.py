@@ -18,6 +18,8 @@ from tempfile import TemporaryDirectory
 import httpx
 
 from c3.aacr import load_aacr_with_audit, summary as aacr_summary
+from c3.annotation import (NOISE_CAUSES, assign_raters, calibration_items,
+                           merge_labels, unmatched_items)
 from c3.classify import classify_references, keep_actionable
 from c3.checkout import prepare_checkout
 from c3.cli_flags import (
@@ -649,6 +651,198 @@ def _analyze(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_annotation_artifacts(settings, dataset, reviewers, source, prs):
+    """Load only fingerprint-bound, successful review/judgment pairs."""
+    from c3.report import _valid_judgment
+    by_pr = {pr.pr_id: pr for pr in prs}
+    reviews, judgments = {}, {}
+    for reviewer in sorted(reviewers):
+        review_root = settings.data_dir / "reviews" / dataset / reviewer
+        for mode in ("diff",):
+            mode_root = review_root / mode
+            if not mode_root.is_dir():
+                continue
+            for run_dir in sorted(mode_root.glob("run*")):
+                match = re.fullmatch(r"run([1-9][0-9]*)", run_dir.name)
+                if not match:
+                    continue
+                run_idx = int(match.group(1))
+                if run_idx != 1:
+                    continue
+                for pr in prs:
+                    review_path = run_dir / f"{pr.pr_id.replace('/', '__')}.json"
+                    if not review_path.is_file():
+                        continue
+                    try:
+                        record = json.loads(review_path.read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        continue
+                    if (not _review_identity_matches(record, pr, reviewer, mode, run_idx, source)
+                            or record.get("error") is not None or record.get("parse_error") is not False
+                            or not _valid_review_record(record, pr, reviewer, mode, run_idx)):
+                        continue
+                    key = (reviewer, pr.pr_id, mode, run_idx)
+                    valid_judgments = []
+                    judgment_root = settings.data_dir / "judgments" / dataset
+                    for judge_dir in sorted(judgment_root.iterdir()) if judgment_root.is_dir() else []:
+                        judgment_path = (judge_dir / reviewer / mode / f"run{run_idx}"
+                                         / f"{pr.pr_id.replace('/', '__')}.json")
+                        if not judgment_path.is_file():
+                            continue
+                        try:
+                            judgment_record = json.loads(judgment_path.read_text(encoding="utf-8"))
+                        except (OSError, ValueError):
+                            continue
+                        judgment = _valid_judgment(judgment_record, pr, record, reviewer, mode,
+                                                   run_idx, judge_dir.name, source)
+                        if judgment is not None:
+                            valid_judgments.append((judge_dir.name, judgment_record))
+                    if not valid_judgments:
+                        continue
+                    # Identical validated judgments from different judges represent one matching set.
+                    matches = valid_judgments[0][1]["matches"]
+                    if any(item[1]["matches"] != matches for item in valid_judgments[1:]):
+                        continue
+                    reviews[key] = record
+                    judgments[key] = {"pr_id": pr.pr_id, "matches": matches}
+    return reviews, judgments
+
+
+def _safe_annotation_paths(output_dir: Path, private_dir: Path, key_name: str) -> None:
+    output_path, private_path = output_dir.resolve(), private_dir.resolve()
+    if (output_path == private_path or output_path in private_path.parents
+            or private_path in output_path.parents):
+        raise ValueError("public and private annotation directories must be separate and non-nested")
+    if output_dir.is_symlink() or (output_dir.exists()
+                                   and (not output_dir.is_dir() or any(output_dir.iterdir()))):
+        raise ValueError(f"{output_dir} output is occupied; choose a new annotation directory")
+    if private_dir.is_symlink() or (private_dir.exists() and not private_dir.is_dir()):
+        raise ValueError(f"{private_dir} is not a safe private directory")
+    private_key = private_dir / key_name
+    if private_key.is_symlink() or private_key.exists():
+        raise ValueError(f"{private_key} already exists; choose a new private key filename")
+
+
+def _write_annotation_handoff(items, raters, seed, output_dir, private_dir, key_name, private_key):
+    _safe_annotation_paths(output_dir, private_dir, key_name)
+    assignments = assign_raters([item.item_id for item in items], raters, seed)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    private_dir.mkdir(parents=True, exist_ok=True)
+    for index, rater in enumerate(sorted(raters), 1):
+        filename = f"rater-{index:02d}.json"
+        assigned = set(item_id for item_id, pair in assignments.items() if rater in pair)
+        payload = {"schema": "c3-annotation-v1",
+                   "items": [asdict(item) for item in items if item.item_id in assigned]}
+        _atomic_record(payload, output_dir / filename)
+        _atomic_record({"item_ids": sorted(assigned)}, output_dir / "assignments" / filename)
+    _atomic_record({"items": private_key, "assignments": assignments,
+                    "raters": sorted(raters)}, private_dir / key_name)
+
+
+def _sample_annotations(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    source, prs = _load_review_prs(settings, args.dataset)
+    reviewers = [part.strip() for part in args.reviewers.split(",") if part.strip()]
+    raters = [part.strip() for part in args.raters.split(",") if part.strip()]
+    if not reviewers or len(set(reviewers)) != len(reviewers) or not raters or len(set(raters)) != len(raters):
+        raise ValueError("reviewers and raters must be unique nonempty comma-separated names")
+    if args.dataset == "D2" and args.per_reviewer is None:
+        raise ValueError("--per-reviewer is required for D2")
+    if args.dataset == "D1" and args.per_reviewer is not None:
+        raise ValueError("D1 annotations use all eligible comments; omit --per-reviewer")
+    reviews, judgments = _load_annotation_artifacts(settings, args.dataset, reviewers, source, prs)
+    items, private_key = unmatched_items(prs, reviews, judgments, reviewers,
+                                         args.per_reviewer, args.seed if args.seed is not None else settings.seed)
+    _write_annotation_handoff(items, raters, args.seed if args.seed is not None else settings.seed,
+                              args.output_dir, args.private_dir, "annotation-key.json", private_key)
+    print(json.dumps({"items": len(items), "raters": len(raters), "output_dir": str(args.output_dir)}))
+    return 0
+
+
+def _calibration_set(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    _, prs = _load_review_prs(settings, "D1")
+    items, labels = calibration_items(prs, args.n, args.seed if args.seed is not None else settings.seed)
+    raters = [part.strip() for part in args.raters.split(",") if part.strip()]
+    if not raters or len(set(raters)) != len(raters):
+        raise ValueError("raters must be unique nonempty comma-separated names")
+    private_key = {item_id: {"label": label} for item_id, label in labels.items()}
+    _write_annotation_handoff(items, raters, args.seed if args.seed is not None else settings.seed,
+                              args.output_dir, args.private_dir, "calibration-key.json", private_key)
+    print(json.dumps({"items": len(items), "raters": len(raters), "output_dir": str(args.output_dir)}))
+    return 0
+
+
+def _merge_annotation_labels(args: argparse.Namespace) -> int:
+    private_path = args.private_dir / "annotation-key.json"
+    private_payload = json.loads(private_path.read_text(encoding="utf-8"))
+    private_key = private_payload.get("items") if isinstance(private_payload, dict) else None
+    private_assignments = private_payload.get("assignments") if isinstance(private_payload, dict) else None
+    configured_raters = private_payload.get("raters") if isinstance(private_payload, dict) else None
+    if (not isinstance(private_key, dict) or not isinstance(private_assignments, dict)
+            or set(private_key) != set(private_assignments)
+            or not isinstance(configured_raters, list)
+            or not configured_raters
+            or any(not isinstance(rater, str) or not rater for rater in configured_raters)):
+        raise ValueError("invalid private annotation key")
+    if len(configured_raters) != len(set(configured_raters)):
+        raise ValueError("invalid private annotation key")
+    if any(not isinstance(raters, list) or any(not isinstance(rater, str) or not rater for rater in raters)
+           for raters in private_assignments.values()):
+        raise ValueError("invalid private assignment schedule")
+    rater_names = configured_raters
+    if (len(rater_names) < 2 or any(not isinstance(raters, list) or len(raters) != 2
+                                    or len(set(raters)) != 2 or any(r not in rater_names for r in raters)
+                                    for raters in private_assignments.values())):
+        raise ValueError("private assignment schedule must assign two distinct raters to every item")
+    names_by_file = {f"rater-{index:02d}.json": name
+                     for index, name in enumerate(rater_names, 1)}
+    expected_files = set(names_by_file)
+    actual_files = {path.name for path in args.labels_dir.glob("rater-*.json")}
+    actual_assignments = {path.name for path in (args.labels_dir / "assignments").glob("rater-*.json")}
+    if actual_files != expected_files or actual_assignments != expected_files:
+        raise ValueError("rater files must exactly match the private assignment schedule")
+    expected_ids = {name: set() for name in rater_names}
+    for item_id, assigned in private_assignments.items():
+        for rater in assigned:
+            expected_ids[rater].add(item_id)
+    rater_labels = {}
+    assignments_dir = args.labels_dir / "assignments"
+    for path in sorted(args.labels_dir.glob("rater-*.json")):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assignment_path = assignments_dir / path.name
+        assignment = json.loads(assignment_path.read_text(encoding="utf-8"))
+        ids = assignment.get("item_ids") if isinstance(assignment, dict) else None
+        labels = payload.get("labels") if isinstance(payload, dict) else None
+        rater = names_by_file[path.name]
+        public_items = payload.get("items") if isinstance(payload, dict) else None
+        public_ids = ({item.get("item_id") for item in public_items if isinstance(item, dict)}
+                      if isinstance(public_items, list) else set())
+        if (not isinstance(ids, list) or len(ids) != len(set(ids))
+                or set(ids) != expected_ids[rater] or not isinstance(labels, dict)
+                or set(labels) != expected_ids[rater] or public_ids != expected_ids[rater]):
+            raise ValueError(f"{path.name} must contain a label for each assigned item ID")
+        rater_labels[rater] = labels
+    manual = json.loads(args.adjudication.read_text(encoding="utf-8")) if args.adjudication else {}
+    manual = manual.get("items", manual) if isinstance(manual, dict) else None
+    if not isinstance(manual, dict):
+        raise ValueError("adjudication file must be an item ID mapping")
+    # Every final report item needs a human-reviewed missed_by_human value.
+    merged = merge_labels(rater_labels, private_key, manual)
+    if any(not isinstance(item.get("missed_by_human"), bool) for item in merged["items"]):
+        raise ValueError("adjudication must manually supply boolean missed_by_human for every item")
+    if any(item["label"] == "noise" and item.get("cause") not in NOISE_CAUSES for item in merged["items"]):
+        raise ValueError("every noise label needs a cause from the annotation guide")
+    if any(item["label"] == "insufficient" for item in merged["items"]):
+        raise ValueError("insufficient items must be resolved or excluded before report merge")
+    output = args.labels_dir / "adjudicated_labels.json"
+    if output.exists():
+        raise ValueError(f"{output} already exists; choose a new labels directory")
+    _atomic_record(merged, output)
+    print(str(output))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="c3", description="C3 code review research pipeline")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -696,6 +890,28 @@ def main(argv: list[str] | None = None) -> int:
     report = commands.add_parser("analyze", help="Analyze saved reviews and judgments")
     report.add_argument("--labels-dir", type=Path, help="Optional directory containing adjudicated_labels.json")
     report.set_defaults(run=_analyze)
+    sample = commands.add_parser("sample", help="Export blinded items for manual noise annotation")
+    sample.add_argument("--dataset", choices=("D1", "D2"), required=True)
+    sample.add_argument("--reviewers", required=True, help="Comma-separated configured reviewer IDs")
+    sample.add_argument("--per-reviewer", type=int, help="D2 sample size per reviewer")
+    sample.add_argument("--raters", required=True, help="Comma-separated annotator names")
+    sample.add_argument("--seed", type=int)
+    sample.add_argument("--output-dir", type=Path, default=Path("results/annotation"))
+    sample.add_argument("--private-dir", type=Path, default=Path("results/annotation-private"))
+    sample.set_defaults(run=_sample_annotations)
+    calibration = commands.add_parser("calibration-set", help="Export blinded D1 expert-reference calibration items")
+    calibration.add_argument("--n", required=True, type=int, help="Even total, balanced across expert valid/negative refs")
+    calibration.add_argument("--raters", required=True, help="Comma-separated annotator names")
+    calibration.add_argument("--seed", type=int)
+    calibration.add_argument("--output-dir", type=Path, default=Path("results/calibration"))
+    calibration.add_argument("--private-dir", type=Path, default=Path("results/annotation-private"))
+    calibration.set_defaults(run=_calibration_set)
+    merge = commands.add_parser("merge-labels", help="Merge manually supplied rater and adjudication labels")
+    merge.add_argument("--labels-dir", type=Path, required=True)
+    merge.add_argument("--private-dir", type=Path, default=Path("results/annotation-private"))
+    merge.add_argument("--adjudication", type=Path, required=True,
+                       help="JSON item-ID map with adjudicated label, missed_by_human, and optional issue_id/cause")
+    merge.set_defaults(run=_merge_annotation_labels)
     args = parser.parse_args(argv)
     try:
         return args.run(args)

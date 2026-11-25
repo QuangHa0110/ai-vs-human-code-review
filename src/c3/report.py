@@ -129,17 +129,80 @@ def _load_labels(labels_dir: Path | None) -> dict:
     return payload
 
 
+def _pr_cluster_label_intervals(labels_by_pr: dict[str, list[dict]], cluster_ids: list[str],
+                                mismatch_by_pr: dict[str, tuple[int, int]], seed: int,
+                                n_boot: int = 2000) -> dict:
+    """Bootstrap comment shares by resampling whole PR clusters with replacement."""
+    noise_clusters = sum(bool(labels_by_pr.get(pr_id)) for pr_id in cluster_ids)
+    missed_clusters = sum(any(item["label"] == "valid" for item in labels_by_pr.get(pr_id, []))
+                          for pr_id in cluster_ids)
+    adjusted_clusters = sum(bool(labels_by_pr.get(pr_id)) and mismatch_by_pr.get(pr_id, (0, 0))[1] > 0
+                            for pr_id in cluster_ids)
+    if len(cluster_ids) < 2:
+        return {"noise": (None, None), "missed": (None, None), "adjusted": (None, None),
+                "noise_status": "insufficient_pr_clusters", "missed_status": "insufficient_pr_clusters",
+                "adjusted_status": "insufficient_pr_clusters"}
+    rng = random.Random(seed)
+    noise_samples, missed_samples, adjusted_samples = [], [], []
+    for _ in range(n_boot):
+        sampled_prs = [cluster_ids[rng.randrange(len(cluster_ids))] for _ in cluster_ids]
+        sample_items = [item for pr_id in sampled_prs for item in labels_by_pr.get(pr_id, [])]
+        noise_count = sum(item["label"] == "noise" for item in sample_items)
+        if sample_items:
+            noise_samples.append(noise_count / len(sample_items))
+        valid_items = [item for item in sample_items if item["label"] == "valid"]
+        if valid_items:
+            missed_samples.append(sum(item["missed_by_human"] for item in valid_items) / len(valid_items))
+        n_unmatched, n_ai = 0, 0
+        for pr_id in sampled_prs:
+            unmatched, total = mismatch_by_pr.get(pr_id, (0, 0))
+            n_unmatched += unmatched
+            n_ai += total
+        if sample_items and n_ai:
+            adjusted_samples.append(1 - (n_unmatched / n_ai) * (noise_count / len(sample_items)))
+
+    def interval(samples):
+        if not samples:
+            return None, None
+        low, high = np.quantile(samples, [0.025, 0.975])
+        return float(low), float(high)
+
+    return {
+        "noise": interval(noise_samples) if noise_clusters >= 2 else (None, None),
+        "missed": interval(missed_samples) if missed_clusters >= 2 else (None, None),
+        "adjusted": interval(adjusted_samples) if adjusted_clusters >= 2 else (None, None),
+        "noise_status": "ok" if noise_clusters >= 2 and noise_samples else "insufficient_pr_clusters",
+        "missed_status": "ok" if missed_clusters >= 2 and missed_samples else "insufficient_pr_clusters",
+        "adjusted_status": "ok" if adjusted_clusters >= 2 and adjusted_samples else "insufficient_pr_clusters",
+    }
+
+
+def _unmatched_ai_indices(identity: tuple, review: dict, judgments: dict) -> set[int] | None:
+    judgment = judgments.get(identity)
+    if judgment is None:
+        return None
+    matched = judgment.matched_ai_indices
+    return set(range(len(review.get("comments", [])))) - matched
+
+
 def _label_metrics(labels: dict, group: tuple[str, str, str], reviews: dict,
-                   outcomes: list[PrOutcome], entries: list) -> dict:
-    """Use only complete per-comment adjudications tied to saved review fingerprints."""
+                   judgments: dict, outcomes: list[PrOutcome], entries: list, seed: int) -> dict:
+    """Measure labels only over fingerprint-bound unmatched AI comments."""
     if not labels:
         return {}
     dataset, reviewer, mode = group
-    relevant_reviews = {identity: record for identity, record in reviews.items()
-                        if identity[:3] == group}
     expected = {}
-    for identity, record in relevant_reviews.items():
-        for index, _ in enumerate(record.get("comments", [])):
+    eligible_prs = set()
+    for identity, record in reviews.items():
+        if identity[:3] != group:
+            continue
+        if dataset in {"D1", "D2"} and (mode != "diff" or identity[3] != 1):
+            continue
+        unmatched = _unmatched_ai_indices(identity, record, judgments)
+        if unmatched is None:
+            continue
+        eligible_prs.add(identity[4])
+        for index in unmatched:
             expected[(*identity, index)] = record.get("fingerprint")
     supplied = {}
     for item in labels.get("items", []):
@@ -153,16 +216,59 @@ def _label_metrics(labels: dict, group: tuple[str, str, str], reviews: dict,
                 or not isinstance(item.get("missed_by_human"), bool) or identity in supplied):
             return {}
         supplied[identity] = item
-    if not expected or set(supplied) != set(expected):
+    if not expected:
+        return {}
+    is_sample = dataset == "D2"
+    if not is_sample and set(supplied) != set(expected):
+        return {}
+    if is_sample and not supplied:
         return {}
     noise_count = sum(item["label"] == "noise" for item in supplied.values())
     valid = [item for item in supplied.values() if item["label"] == "valid"]
-    mismatch = mismatch_rate(outcomes)
+    valid_missed = sum(item["missed_by_human"] for item in valid)
+    scoped_outcomes = outcomes
+    if dataset in {"D1", "D2"} and mode == "diff":
+        scoped_outcomes = _majority_outcomes([entry[0] for entry in entries if entry[4] == 1])
+    mismatch = mismatch_rate(scoped_outcomes)
     if math.isnan(mismatch):
         return {}
-    return {"true_noise_share": noise_count / len(supplied),
-            "missed_by_human_share": sum(item["missed_by_human"] for item in valid) / len(valid) if valid else None,
-            "adjusted_precision": 1 - mismatch * noise_count / len(supplied)}
+    noise_share = noise_count / len(supplied)
+    missed_share = valid_missed / len(valid) if valid else None
+    partial_sample = is_sample and len(supplied) < len(expected)
+    adjusted_precision = None if partial_sample else 1 - mismatch * noise_share
+    labels_by_pr = {}
+    for item in supplied.values():
+        labels_by_pr.setdefault(item["pr_id"], []).append(item)
+    if partial_sample:
+        cluster_ids = sorted(labels_by_pr)
+    else:
+        cluster_ids = sorted(eligible_prs)
+    mismatch_by_pr = {outcome.pr_id: (outcome.n_ai - outcome.n_ai_matched, outcome.n_ai)
+                      for outcome in scoped_outcomes}
+    intervals = _pr_cluster_label_intervals(labels_by_pr, cluster_ids, mismatch_by_pr, seed)
+    noise_low, noise_high = intervals["noise"]
+    missed_low, missed_high = intervals["missed"]
+    adjusted_low, adjusted_high = intervals["adjusted"]
+    if partial_sample:
+        adjusted_low = adjusted_high = None
+    adjusted_ci_status = ("unavailable_sample_mismatch_scope" if partial_sample
+                          else intervals["adjusted_status"])
+    return {"true_noise_share": noise_share,
+            "true_noise_share_ci_low": noise_low, "true_noise_share_ci_high": noise_high,
+            "true_noise_share_ci_status": intervals["noise_status"],
+            "missed_by_human_share": missed_share,
+            "missed_by_human_share_ci_low": missed_low,
+            "missed_by_human_share_ci_high": missed_high,
+            "missed_by_human_share_ci_status": intervals["missed_status"],
+            "adjusted_precision": adjusted_precision,
+            "adjusted_precision_ci_low": adjusted_low,
+            "adjusted_precision_ci_high": adjusted_high,
+            "adjusted_precision_ci_status": adjusted_ci_status,
+            "n_labeled": len(supplied), "n_unmatched": len(expected),
+            "label_scope": "run1_diff" if dataset in {"D1", "D2"} else "all_unmatched",
+            "status": "sampled_estimate" if partial_sample else "ok",
+            "adjusted_precision_status": ("unavailable_sample_mismatch_scope" if partial_sample
+                                           else ("sampled_estimate" if is_sample else "ok"))}
 
 
 def _d1_new_issue_clusters(labels: dict, reviews: dict, judgments: dict) -> tuple[dict, bool]:
@@ -175,7 +281,10 @@ def _d1_new_issue_clusters(labels: dict, reviews: dict, judgments: dict) -> tupl
     for identity, review in relevant.items():
         if identity not in judgments:
             return {}, False
-        for ai_index in range(len(review.get("comments", []))):
+        unmatched = _unmatched_ai_indices(identity, review, judgments)
+        if unmatched is None:
+            return {}, False
+        for ai_index in unmatched:
             expected[(*identity, ai_index)] = review["fingerprint"]
     supplied = {}
     for item in labels.get("items", []):
@@ -212,7 +321,8 @@ def _d1_new_issue_clusters(labels: dict, reviews: dict, judgments: dict) -> tupl
 
 
 def _paired_noise_difference(labels: dict, group: tuple[str, str], pairs: list[tuple[str, int]],
-                             reviews: dict, seed: int) -> tuple[float | None, float | None, float | None, int, str]:
+                             reviews: dict, judgments: dict,
+                             seed: int) -> tuple[float | None, float | None, float | None, int, str]:
     """Mean same-PR agent-minus-diff noise delta with PR-cluster bootstrap CI."""
     if not labels:
         return None, None, None, 0, "labels_not_supplied"
@@ -226,6 +336,9 @@ def _paired_noise_difference(labels: dict, group: tuple[str, str], pairs: list[t
             review = reviews.get(identity)
             if review is None:
                 return None, None, None, 0, "missing_fingerprint_bound_review"
+            unmatched = _unmatched_ai_indices(identity, review, judgments)
+            if unmatched is None:
+                return None, None, None, 0, "missing_valid_judgment"
             items = {}
             for item in labels.get("items", []):
                 if not isinstance(item, dict) or (item.get("dataset"), item.get("reviewer"), item.get("mode"),
@@ -233,13 +346,13 @@ def _paired_noise_difference(labels: dict, group: tuple[str, str], pairs: list[t
                     continue
                 index = item.get("ai_index")
                 if (isinstance(index, bool) or not isinstance(index, int)
-                        or not 0 <= index < len(review.get("comments", []))
+                        or index not in unmatched
                         or item.get("review_fingerprint") != review.get("fingerprint")
                         or item.get("label") not in {"valid", "noise"}
                         or not isinstance(item.get("missed_by_human"), bool) or index in items):
                     return None, None, None, 0, "labels_incomplete_or_unusable"
                 items[index] = item
-            if len(items) != len(review.get("comments", [])):
+            if set(items) != unmatched:
                 return None, None, None, 0, "labels_incomplete_or_unusable"
             rates[mode] = (sum(item["label"] == "noise" for item in items.values()) / len(items)
                            if items else None)
@@ -340,11 +453,20 @@ def analyze(settings, labels_dir: Path | None = None) -> dict[str, Path]:
             rq_rows.append(_stat_row(dataset, reviewer, mode, metric, value, low, high, status))
         for metric, value in count.items():
             rq_rows.append(_stat_row(dataset, reviewer, mode, metric, value, status="ok"))
-        label_metrics = _label_metrics(labels, key, valid_reviews, successful, entries)
+        label_metrics = _label_metrics(labels, key, valid_reviews, valid_judgments,
+                                       successful, entries, settings.seed)
         for metric in ("true_noise_share", "missed_by_human_share", "adjusted_precision"):
             value = label_metrics.get(metric)
-            status = "ok" if value is not None else ("labels_not_supplied" if not labels else "labels_incomplete_or_unusable")
-            rq_rows.append(_stat_row(dataset, reviewer, mode, metric, value, status=status))
+            status = label_metrics.get(f"{metric}_status",
+                                      label_metrics.get("status", "labels_not_supplied" if not labels else "labels_incomplete_or_unusable"))
+            rq_rows.append(_stat_row(
+                dataset, reviewer, mode, metric, value,
+                label_metrics.get(f"{metric}_ci_low"), label_metrics.get(f"{metric}_ci_high"),
+                status=status, n_labeled=label_metrics.get("n_labeled"),
+                n_unmatched=label_metrics.get("n_unmatched"),
+                sampled=status == "sampled_estimate",
+                label_scope=label_metrics.get("label_scope"),
+                ci_status=label_metrics.get(f"{metric}_ci_status")))
         for category, (hit, total) in recall_by_category(successful).items():
             category_rows.append({"dataset": dataset, "reviewer": reviewer, "mode": mode,
                                   "category": category, "hits": hit, "references": total,
@@ -436,7 +558,7 @@ def analyze(settings, labels_dir: Path | None = None) -> dict[str, Path]:
                 mismatch_diffs.append((new.n_ai - new.n_ai_matched) / new.n_ai
                                       - (old.n_ai - old.n_ai_matched) / old.n_ai)
             noise_difference, noise_low, noise_high, noise_pairs, noise_status = _paired_noise_difference(
-                labels, (dataset, reviewer), common, valid_reviews, settings.seed)
+                labels, (dataset, reviewer), common, valid_reviews, valid_judgments, settings.seed)
             context_rows.append({"dataset": dataset, "reviewer": reviewer, "n_paired_pr_runs": len(common),
                                  "recall_agent_minus_diff": statistics.mean(recall_diffs) if recall_defined else None,
                                  "n_ai_agent_minus_diff": statistics.mean(n_ai_diffs),
@@ -463,7 +585,8 @@ def analyze(settings, labels_dir: Path | None = None) -> dict[str, Path]:
                                      else "missing_diff_pair"})
 
     rq1path = settings.results_dir / TABLES["rq1_rq2"]
-    _csv(rq1path, rq_rows, ["dataset", "reviewer", "mode", "metric", "value", "ci_low", "ci_high", "status"])
+    _csv(rq1path, rq_rows, ["dataset", "reviewer", "mode", "metric", "value", "ci_low", "ci_high",
+                            "status", "n_labeled", "n_unmatched", "sampled", "label_scope", "ci_status"])
     output_paths = {name: settings.results_dir / filename for name, filename in TABLES.items()}
     output_paths["rq1_rq2"] = rq1path
     _csv(output_paths["rq3_pairwise"], pair_rows, ["dataset", "mode", "reviewer_a", "reviewer_b", "recall_difference", "only_a", "only_b", "p_value", "p_holm", "odds_ratio", "n_paired_prs", "primary", "status"])

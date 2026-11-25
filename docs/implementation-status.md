@@ -19,8 +19,8 @@ Không chạy thí nghiệm chính trước khi pilot chốt mô hình và cấu
 | 10 | Giám khảo so khớp | `task10_judge_light` (GPT-6 Luna) | Qua review đặc tả và chất lượng |
 | 11 | Chỉ số, tập gộp, độ dao động | `task11_metrics_light` (GPT-6 Luna) | Qua review đặc tả và chất lượng |
 | 12 | Kiểm định, phân tích lực | `task12_stats_light` (GPT-6 Luna) | Qua review đặc tả và chất lượng |
-| 13 | Công cụ chấm tay | Để sau theo yêu cầu | Hoãn |
-| 14 | Tích hợp CLI, xuất báo cáo, hướng dẫn | `task14_report_light` (GPT-6 Luna) | Qua review đặc tả và chất lượng; task 13 vẫn hoãn |
+| 13 | Công cụ chấm tay | `task13_annotation_light` (GPT-6 Luna) | Qua review đặc tả và chất lượng; chờ dữ liệu và người chấm thật |
+| 14 | Tích hợp CLI, xuất báo cáo, hướng dẫn | `task14_report_light` (GPT-6 Luna) | Qua review đặc tả và chất lượng |
 
 ## Kiểm soát triển khai
 
@@ -71,3 +71,5 @@ Task 11 qua hai vòng review; thêm guard ID tham chiếu trùng trong cùng PR.
 Task 12 qua hai vòng review; có kiểm định tham chiếu và phép hoán vị theo PR. Full suite: 252 passed, 1 skipped. Cỡ mẫu chờ tham số pilot thật.
 
 Task 14 qua hai vòng review. Báo cáo dùng nhãn tùy chọn cho RQ5/RQ6 và khoảng tin cậy RQ6 bootstrap theo PR; khi chưa có nhãn, ghi trạng thái chưa khả dụng. Full suite: 260 passed, 1 skipped. Chưa chạy AI thật.
+
+Task 13 đã triển khai bộ công cụ tạo mẫu `run1`/`diff` cho D1 và D2, tạo tập hiệu chuẩn, chia file mù cho hai người chấm, giữ khóa ánh xạ riêng, và ghép nhãn sau phân xử. Báo cáo nhận nhãn D1 đầy đủ cho RQ5; mẫu D2 được ghi rõ là ước lượng, với khoảng tin cậy bootstrap theo PR khi đủ PR. Review đặc tả và chất lượng đã chấp nhận. Full suite cuối: 281 passed, 1 skipped; `git diff --check` sạch. Chưa có nhãn tay hay suy luận mô hình thật; nhóm cần chốt cỡ mẫu D2, người chấm, và thực hiện phân xử trước khi dùng kết quả nghiên cứu.

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from c3.config import Settings
+from c3 import cli
 from c3.models import AiComment, PullRequest, Reference, save_json
 from c3.report import analyze
 
@@ -128,6 +129,126 @@ def test_analyze_pools_shared_adjudicated_novel_issue_once(tmp_path):
     assert claude["pool_status"] == "adjudicated"
 
 
+def test_unmatched_sample_merge_activates_d1_report_with_matched_comment_present(tmp_path, monkeypatch):
+    settings = Settings(data_dir=tmp_path / "data", results_dir=tmp_path / "results", seed=11)
+    pr = _pr("D1")
+    _write_run(settings, pr, "claude", hit=True, n_comments=2)
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+    output, private = settings.results_dir / "annotation", settings.results_dir / "annotation-private"
+    assert cli.main(["sample", "--dataset", "D1", "--reviewers", "claude", "--raters", "alice,bob",
+                     "--output-dir", str(output), "--private-dir", str(private)]) == 0
+    private_key = json.loads((private / "annotation-key.json").read_text())
+    assert len(private_key["items"]) == 1
+    item_id = next(iter(private_key["items"]))
+    for path in output.glob("rater-*.json"):
+        payload = json.loads(path.read_text())
+        payload["labels"] = {item_id: {"label": "valid"}}
+        path.write_text(json.dumps(payload))
+    adjudication = output / "adjudication.json"
+    adjudication.write_text(json.dumps({"items": {
+        item_id: {"label": "valid", "missed_by_human": True, "issue_id": "novel-1"}}}))
+    assert cli.main(["merge-labels", "--labels-dir", str(output), "--private-dir", str(private),
+                     "--adjudication", str(adjudication)]) == 0
+
+    outputs = analyze(settings, output)
+
+    pooled = next(row for row in _rows(outputs["rq5_pooled"]) if row["party"] == "claude")
+    noise = next(row for row in _rows(outputs["rq1_rq2"])
+                 if row["dataset"] == "D1" and row["metric"] == "true_noise_share")
+    assert pooled["pool_status"] == "adjudicated"
+    assert noise["status"] == "ok"
+    assert noise["n_labeled"] == noise["n_unmatched"] == "1"
+
+
+def test_d2_sampled_noise_is_reported_as_estimate_and_rq6_requires_complete_pairs(tmp_path):
+    settings = Settings(data_dir=tmp_path / "data", results_dir=tmp_path / "results")
+    pr = _pr("D2")
+    _write_run(settings, pr, "claude", "diff", hit=True, n_comments=3)
+    _write_run(settings, pr, "claude", "agent", hit=False, n_comments=1)
+    diff_path = settings.data_dir / "reviews/D2/claude/diff/run1/owner__repo#1.json"
+    agent_path = settings.data_dir / "reviews/D2/claude/agent/run1/owner__repo#1.json"
+    diff_review, agent_review = json.loads(diff_path.read_text()), json.loads(agent_path.read_text())
+    labels = [
+        {"dataset": "D2", "pr_id": pr.pr_id, "reviewer": "claude", "mode": "diff", "run_idx": 1,
+         "ai_index": 1, "review_fingerprint": diff_review["fingerprint"], "label": "noise",
+         "missed_by_human": False},
+        {"dataset": "D2", "pr_id": pr.pr_id, "reviewer": "claude", "mode": "agent", "run_idx": 1,
+         "ai_index": 0, "review_fingerprint": agent_review["fingerprint"], "label": "valid",
+         "missed_by_human": True},
+    ]
+    label_dir = tmp_path / "labels"
+    label_dir.mkdir()
+    (label_dir / "adjudicated_labels.json").write_text(json.dumps({"schema": "c3-adjudication-v1", "items": labels}))
+
+    outputs = analyze(settings, label_dir)
+
+    noise = next(row for row in _rows(outputs["rq1_rq2"])
+                 if row["dataset"] == "D2" and row["mode"] == "diff" and row["metric"] == "true_noise_share")
+    context = next(row for row in _rows(outputs["rq6_context"]) if row.get("reviewer") == "claude")
+    assert noise["status"] == "sampled_estimate"
+    assert noise["n_labeled"] == "1" and noise["n_unmatched"] == "2"
+    assert noise["ci_low"] == noise["ci_high"] == ""
+    assert noise["ci_status"] == "insufficient_pr_clusters"
+    assert context["noise_status"] == "labels_incomplete_or_unusable"
+    assert context["true_noise_share_agent_minus_diff"] == ""
+
+
+def test_partial_d2_adjusted_precision_is_unavailable_across_mixed_runs(tmp_path):
+    settings = Settings(data_dir=tmp_path / "data", results_dir=tmp_path / "results")
+    prs = [_pr("D2", 1), _pr("D2", 2)]
+    for pr in prs:
+        _write_run(settings, pr, "claude", "diff", run=1, hit=False, n_comments=2 if pr.number == 1 else 3)
+        _write_run(settings, pr, "claude", "diff", run=2, hit=True, n_comments=4)
+    pr = prs[0]
+    review_path = settings.data_dir / "reviews/D2/claude/diff/run1/owner__repo#1.json"
+    review = json.loads(review_path.read_text())
+    label_dir = tmp_path / "labels"
+    label_dir.mkdir()
+    (label_dir / "adjudicated_labels.json").write_text(json.dumps({"schema": "c3-adjudication-v1", "items": [{
+        "dataset": "D2", "pr_id": pr.pr_id, "reviewer": "claude", "mode": "diff", "run_idx": 1,
+        "ai_index": 0, "review_fingerprint": review["fingerprint"], "label": "noise",
+        "missed_by_human": False}]}))
+
+    outputs = analyze(settings, label_dir)
+
+    rows = _rows(outputs["rq1_rq2"])
+    noise = next(row for row in rows if row["dataset"] == "D2" and row["metric"] == "true_noise_share")
+    adjusted = next(row for row in rows if row["dataset"] == "D2" and row["metric"] == "adjusted_precision")
+    assert noise["status"] == "sampled_estimate" and noise["value"] == "1.0"
+    assert noise["n_labeled"] == "1" and noise["n_unmatched"] == "5"
+    assert adjusted["value"] == ""
+    assert adjusted["status"] == "unavailable_sample_mismatch_scope"
+
+
+def test_sampled_comment_shares_use_pr_cluster_bootstrap_intervals(tmp_path):
+    settings = Settings(data_dir=tmp_path / "data", results_dir=tmp_path / "results", seed=29)
+    prs = [_pr("D2", 1), _pr("D2", 2), _pr("D2", 3)]
+    for pr, count in zip(prs, (4, 1, 1)):
+        _write_run(settings, pr, "claude", "diff", hit=False, n_comments=count)
+    labels = []
+    for pr, review_count, label in ((prs[0], 4, "noise"), (prs[1], 1, "valid")):
+        path = settings.data_dir / "reviews/D2/claude/diff/run1" / f"{pr.pr_id.replace('/', '__')}.json"
+        review = json.loads(path.read_text())
+        for index in range(review_count):
+            labels.append({"dataset": "D2", "pr_id": pr.pr_id, "reviewer": "claude", "mode": "diff",
+                           "run_idx": 1, "ai_index": index, "review_fingerprint": review["fingerprint"],
+                           "label": label, "missed_by_human": label == "valid"})
+    label_dir = tmp_path / "labels"
+    label_dir.mkdir()
+    (label_dir / "adjudicated_labels.json").write_text(json.dumps({"schema": "c3-adjudication-v1", "items": labels}))
+
+    outputs = analyze(settings, label_dir)
+
+    rows = _rows(outputs["rq1_rq2"])
+    noise = next(row for row in rows if row["dataset"] == "D2" and row["metric"] == "true_noise_share")
+    missed = next(row for row in rows if row["dataset"] == "D2" and row["metric"] == "missed_by_human_share")
+    assert noise["value"] == "0.8" and noise["status"] == "sampled_estimate"
+    assert noise["ci_low"] == "0.0" and noise["ci_high"] == "1.0"
+    assert noise["ci_status"] == "ok"
+    assert missed["ci_low"] == missed["ci_high"] == ""
+    assert missed["ci_status"] == "insufficient_pr_clusters"
+
+
 def test_d1_pool_is_baseline_only_if_valid_unmatched_comment_lacks_issue_id(tmp_path):
     settings = Settings(data_dir=tmp_path / "data", results_dir=tmp_path / "results")
     pr = _pr("D1")
@@ -154,10 +275,10 @@ def test_analyze_reports_paired_context_and_label_noise_differences(tmp_path):
     _write_run(settings, pr, "claude", "diff", hit=True, n_comments=2)
     _write_run(settings, pr, "claude", "agent", hit=False, n_comments=1)
     items = []
-    for mode, labels in (("diff", ["valid", "noise"]), ("agent", ["valid"])):
+    for mode, labeled_indices in (("diff", [(1, "noise")]), ("agent", [(0, "valid")])):
         review_path = settings.data_dir / "reviews" / "D2" / "claude" / mode / "run1" / "owner__repo#1.json"
         review = json.loads(review_path.read_text())
-        for index, label in enumerate(labels):
+        for index, label in labeled_indices:
             items.append({"dataset": "D2", "pr_id": pr.pr_id, "reviewer": "claude", "mode": mode,
                           "run_idx": 1, "ai_index": index, "review_fingerprint": review["fingerprint"],
                           "label": label, "missed_by_human": label == "valid"})
@@ -172,7 +293,7 @@ def test_analyze_reports_paired_context_and_label_noise_differences(tmp_path):
                and item["status"] == "ok")
     assert float(row["n_ai_agent_minus_diff"]) == -1.0
     assert float(row["mismatch_agent_minus_diff"]) == 0.5
-    assert float(row["true_noise_share_agent_minus_diff"]) == -0.5
+    assert float(row["true_noise_share_agent_minus_diff"]) == -1.0
 
 
 def test_analyze_context_label_noise_is_unavailable_without_labels(tmp_path):

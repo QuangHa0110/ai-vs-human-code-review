@@ -34,7 +34,7 @@ The usual sequence is:
 6. Complete the separately coordinated manual annotation and adjudication work.
 7. Generate tables with `analyze`.
 
-The end-to-end commands are documented in `uv run c3 <command> --help`. Review model selection, account ownership, and who runs each subscription-backed CLI with the research group before inference. The current experiment has no selected model version, and Task13 manual annotation remains deferred.
+The end-to-end commands are documented in `uv run c3 <command> --help`. Review model selection, account ownership, and who runs each subscription-backed CLI with the research group before inference. The current experiment has no selected model version. Task13 annotation tooling is ready for collaborators, but no human labels have been collected.
 
 ## Reporting
 
@@ -48,7 +48,11 @@ Reports are written under `C3_RESULTS_DIR` (default `results/`). `rq1_rq2.csv` c
 
 No hand judgments are currently present. Consequently, the report leaves `true_noise_share`, `missed_by_human_share`, and `adjusted_precision` blank with a label status; it does not infer labels from unmatched comments. Pooled RQ5 uses the valid D1 references as a baseline and marks that it has no adjudicated new-issue clusters. Human precision is reported only when D1 contains verified negative examples. D3 calibration stays unavailable until a benchmark confidence interval is supplied.
 
-When adjudications are ready, `--labels-dir DIR` accepts `DIR/adjudicated_labels.json` with schema `c3-adjudication-v1`. Each `items` entry must contain `dataset`, `pr_id`, `reviewer`, `mode`, `run_idx`, `ai_index`, `review_fingerprint`, `label` (`valid` or `noise`), and boolean `missed_by_human`. Entries must cover every comment for the selected dataset/reviewer/mode group and match saved review fingerprints. Every valid D1 comment unmatched to expert references must have a nonempty `issue_id`; it groups the same novel issue across reviewers. An `issue_id` is rejected if the corresponding judgment matched that AI comment to an expert reference. RQ5 uses only complete, fingerprint-bound D1 `run1`/`diff` labels to add issue clusters; absent, partial, or missing-`issue_id` labels leave the pool `baseline_only`. Optional `d3_benchmark_ci` maps a reviewer to supplied `recall_low` and `recall_high` bounds; no bounds are inferred. Partial, malformed, or stale labels are reported as unavailable.
+When adjudications are ready, `--labels-dir DIR` accepts `DIR/adjudicated_labels.json` with schema `c3-adjudication-v1`. Each `items` entry must contain `dataset`, `pr_id`, `reviewer`, `mode`, `run_idx`, `ai_index`, `review_fingerprint`, `label` (`valid` or `noise`), and boolean `missed_by_human`. Entries must cover every unmatched AI comment in the selected `run1`/`diff` group and match saved review fingerprints. Every valid D1 comment unmatched to expert references must have a nonempty `issue_id`; it groups the same novel issue across reviewers. An `issue_id` is rejected if the corresponding judgment matched that AI comment to an expert reference. RQ5 uses only complete, fingerprint-bound D1 `run1`/`diff` labels to add issue clusters; absent, partial, or missing-`issue_id` labels leave the pool `baseline_only`. Optional `d3_benchmark_ci` maps a reviewer to supplied `recall_low` and `recall_high` bounds; no bounds are inferred. Partial D2 labels produce marked sample estimates where supported; malformed or stale labels are unavailable.
+
+## Collaborator annotation handoff
+
+Task13 provides blinded `sample`, balanced D1 `calibration-set`, and `merge-labels` commands. The workflow exports one file per rater plus assignment lists, keeps reviewer/run/fingerprint keys under ignored `results/annotation-private/`, and requires explicit human adjudication before report labels are written. Follow the [annotation guide](docs/annotation-guide.md) for label definitions, handoff examples, calibration, and merge steps. Do not share or publish the private key directory.
 
 ## Repository conventions
 
