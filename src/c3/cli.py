@@ -27,7 +27,8 @@ from c3.cli_flags import (
 from c3.config import load_settings
 from c3.diffutil import filter_java
 from c3.github_client import GitHubClient
-from c3.models import CATEGORIES, PullRequest, load_pr, save_json
+from c3.judge import build_judge_prompt, judge_pr, validation_subset
+from c3.models import AiComment, CATEGORIES, PullRequest, load_pr, save_json
 from c3.review import ReviewResult, build_review_prompt, run_review
 from c3.runners import CachedRunner, make_runner
 from c3.select import anonymize, assess_candidate, sample_prs
@@ -462,6 +463,153 @@ def _review(args: argparse.Namespace) -> int:
     return 0
 
 
+def _review_identity_matches(record: object, pr: PullRequest, reviewer: str,
+                             mode: str, run_idx: int, source: Path) -> bool:
+    if not isinstance(record, dict) or record.get("source") != str(source):
+        return False
+    if (record.get("pr_id") != pr.pr_id or record.get("reviewer") != reviewer
+            or record.get("mode") != mode or record.get("run_idx") != run_idx
+            or not isinstance(record.get("fingerprint"), str)):
+        return False
+    identity = record.get("fingerprint_input")
+    if not isinstance(identity, dict):
+        return False
+    expected = {"dataset": pr.dataset, "pr_id": pr.pr_id, "repo": pr.repo,
+                "base_sha": pr.base_sha, "head_sha": pr.review_sha, "diff": pr.diff,
+                "mode": mode, "reviewer": reviewer, "run_idx": run_idx}
+    if any(identity.get(key) != value for key, value in expected.items()):
+        return False
+    fingerprint = sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    return record.get("fingerprint") == fingerprint
+
+
+def _judge(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    spec = settings.reviewers.get(args.judge)
+    if spec is None:
+        raise ValueError(f"Unknown judge {args.judge!r}")
+    if not spec.model.strip():
+        raise ValueError(f"Set a pinned model for judge {args.judge}")
+    source, prs = _load_review_prs(settings, args.dataset)
+    if args.run_idx < 1:
+        raise ValueError("--run must be positive")
+    selected = validation_subset([pr.pr_id for pr in prs], 0.2, settings.seed) if args.validation_only else [
+        pr.pr_id for pr in prs
+    ]
+    by_id = {pr.pr_id: pr for pr in prs}
+    output = settings.data_dir / "judgments" / args.dataset / args.judge / args.reviewer / args.mode / f"run{args.run_idx}"
+    review_dir = settings.data_dir / "reviews" / args.dataset / args.reviewer / args.mode / f"run{args.run_idx}"
+    skipped = Counter()
+    runner = None
+    summary_identity = {"dataset": args.dataset, "judge": args.judge, "reviewer": args.reviewer,
+                        "mode": args.mode, "run_idx": args.run_idx, "selected_pr_ids": selected,
+                        "source": str(source)}
+    summary_fingerprint = sha256(json.dumps(summary_identity, sort_keys=True,
+                                            ensure_ascii=False).encode()).hexdigest()
+    summary_path = output / "_meta.json"
+    if summary_path.exists():
+        try:
+            old_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"Cannot resume invalid judgment summary {summary_path}") from exc
+        if (not isinstance(old_summary, dict)
+                or any(old_summary.get(key) != value for key, value in summary_identity.items())
+                or old_summary.get("fingerprint") != summary_fingerprint):
+            raise ValueError(f"Judgment fingerprint mismatch in {summary_path}; choose a new data directory")
+
+    for pr_id in selected:
+        pr = by_id[pr_id]
+        review_path = review_dir / f"{pr.pr_id.replace('/', '__')}.json"
+        if not review_path.is_file():
+            raise ValueError(f"Missing saved review artifact: {review_path}")
+        try:
+            review_record = json.loads(review_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"Invalid saved review artifact: {review_path}") from exc
+        if not _review_identity_matches(review_record, pr, args.reviewer, args.mode, args.run_idx, source):
+            raise ValueError(f"Review fingerprint or PR identity mismatch in {review_path}")
+        judgment_path = output / f"{pr.pr_id.replace('/', '__')}.json"
+        if review_record.get("error") is not None:
+            if judgment_path.exists():
+                raise ValueError(f"Review failed but an existing judgment artifact remains at {judgment_path}")
+            skipped["run_error"] += 1
+            continue
+        if review_record.get("parse_error") is True:
+            if judgment_path.exists():
+                raise ValueError(f"Review parse failed but an existing judgment artifact remains at {judgment_path}")
+            skipped["parse_error"] += 1
+            continue
+        if not _valid_review_record(review_record, pr, args.reviewer, args.mode, args.run_idx):
+            raise ValueError(f"Invalid saved review artifact: {review_path}")
+        review = ReviewResult(pr.pr_id, args.reviewer, args.mode, args.run_idx,
+                              [AiComment(**item) for item in review_record["comments"]],
+                              review_record["meta"])
+        system, user = build_judge_prompt(pr, review)
+        if review.comments and runner is None:
+            runner = make_runner(args.judge, settings)
+        fingerprint_input = {"dataset": args.dataset, "pr_id": pr.pr_id, "reviewer": args.reviewer,
+                             "mode": args.mode, "run_idx": args.run_idx, "judge": args.judge,
+                             "backend": spec.backend, "model": spec.model,
+                             "runner": type(runner).__name__ if runner is not None else None,
+                             "tool_version": getattr(runner, "tool_version", None),
+                             "system": system, "user": user,
+                             "review_fingerprint": review_record["fingerprint"]}
+        judgment_fingerprint = sha256(json.dumps(fingerprint_input, sort_keys=True,
+                                                 ensure_ascii=False).encode()).hexdigest()
+        if judgment_path.exists():
+            try:
+                old = json.loads(judgment_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise ValueError(f"Cannot resume invalid judgment artifact {judgment_path}") from exc
+            valid_refs = {ref.ref_id for ref in pr.references if ref.valid is True}
+            valid_matches = isinstance(old, dict) and isinstance(old.get("matches"), list)
+            seen_matches = set()
+            if valid_matches:
+                for match in old["matches"]:
+                    if (not isinstance(match, dict) or set(match) != {"ref_id", "ai_index"}
+                            or not isinstance(match["ref_id"], str)
+                            or match["ref_id"] not in valid_refs
+                            or isinstance(match["ai_index"], bool)
+                            or not isinstance(match["ai_index"], int)
+                            or not 0 <= match["ai_index"] < len(review.comments)
+                            or (match["ref_id"], match["ai_index"]) in seen_matches):
+                        valid_matches = False
+                        break
+                    seen_matches.add((match["ref_id"], match["ai_index"]))
+            invalid_count = old.get("invalid") if isinstance(old, dict) else None
+            expected_record_identity = {
+                "pr_id": pr.pr_id, "reviewer": args.reviewer, "mode": args.mode,
+                "run_idx": args.run_idx, "judge": args.judge,
+                "review_fingerprint": review_record["fingerprint"], "source": str(source),
+            }
+            old_input = old.get("fingerprint_input") if isinstance(old, dict) else None
+            old_digest = (sha256(json.dumps(old_input, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+                          if isinstance(old_input, dict) else None)
+            if (not isinstance(old, dict)
+                    or any(old.get(key) != value for key, value in expected_record_identity.items())
+                    or old.get("fingerprint") != judgment_fingerprint
+                    or old_input != fingerprint_input or old_digest != old.get("fingerprint")
+                    or not valid_matches
+                    or isinstance(invalid_count, bool) or not isinstance(invalid_count, int)
+                    or invalid_count < 0):
+                raise ValueError(f"Invalid existing judgment artifact {judgment_path}; choose a new data directory")
+            if old.get("pr_id") == pr.pr_id and old.get("review_fingerprint") == review_record["fingerprint"]:
+                continue
+        result = judge_pr(runner, pr, review, args.judge)
+        record = asdict(result)
+        record.update(fingerprint=judgment_fingerprint, fingerprint_input=fingerprint_input,
+                      review_fingerprint=review_record["fingerprint"], source=str(source))
+        _atomic_record(record, judgment_path)
+    summary = {**summary_identity, "fingerprint": summary_fingerprint,
+               "selected_count": len(selected), "skipped_run_error": skipped["run_error"],
+               "skipped_parse_error": skipped["parse_error"]}
+    _atomic_record(summary, summary_path)
+    print(json.dumps({"judged": len(selected) - sum(skipped.values()), **{
+        key: value for key, value in summary.items() if key.startswith("skipped_")
+    }}))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="c3", description="C3 code review research pipeline")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -491,6 +639,14 @@ def main(argv: list[str] | None = None) -> int:
     review.add_argument("--runs", required=True, type=int)
     review.add_argument("--dataset", choices=("D1", "D2", "D3"), required=True)
     review.set_defaults(run=_review)
+    judge = commands.add_parser("judge", help="Match saved AI reviews to human references")
+    judge.add_argument("--judge", required=True)
+    judge.add_argument("--dataset", choices=("D1", "D2", "D3"), required=True)
+    judge.add_argument("--reviewer", required=True)
+    judge.add_argument("--mode", choices=("diff", "agent"), required=True)
+    judge.add_argument("--run", dest="run_idx", required=True, type=int)
+    judge.add_argument("--validation-only", action="store_true")
+    judge.set_defaults(run=_judge)
     args = parser.parse_args(argv)
     try:
         return args.run(args)
