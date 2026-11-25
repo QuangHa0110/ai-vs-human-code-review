@@ -15,7 +15,7 @@ Không chạy thí nghiệm chính trước khi pilot chốt mô hình và cấu
 | 6 | Nạp AACR-Bench D1 | `task06_aacr` | Qua hai vòng review; nguồn thật xác minh riêng |
 | 7 | Nạp SWE-PRBench D3 | `task07_swepr` | Qua hai vòng review |
 | 8 | Phân loại nhận xét | `task08_classify` | Qua hai vòng review; D1/D3 giữ nguyên tham chiếu |
-| 9 | Checkout và chạy review | `task09_review` | Đang triển khai |
+| 9 | Checkout và chạy review | `task09_resume_light` (GPT-6 Luna) | Qua review đặc tả và chất lượng; 25 test riêng đạt |
 | 10 | Giám khảo so khớp | Chưa giao | Chờ kết quả review |
 | 11–12 | Chỉ số, kiểm định, phân tích lực | Chưa giao | Chờ mô hình kết quả |
 | 13 | Công cụ chấm tay | Để sau theo yêu cầu | Hoãn |
@@ -45,4 +45,20 @@ Người dùng đã chọn tiếp tục bằng subagent trong phiên điều ph�
 
 Lead chạy lại `.venv/bin/python -m pytest -q`: **49 passed**.
 Lỗi payload Claude `null` được reviewer phát hiện, agent sửa và reviewer kiểm tra lại đạt.
-Task 3–8 đã qua review; suite **169 test đạt, 1 test dữ liệu bỏ qua khi thiếu nguồn cục bộ**. Task 9 đang triển khai. Task 10–12 và 14 chưa triển khai; task 13 tiếp tục để sau.
+Task 3–8 đã qua review; suite **169 test đạt, 1 test dữ liệu bỏ qua khi thiếu nguồn cục bộ** trước task 9. Task 10–12 và 14 chưa triển khai; task 13 tiếp tục để sau.
+
+## Bàn giao khi tạm dừng — 2026-11-25
+
+Người dùng yêu cầu dừng để tắt máy. Agent triển khai task 9 đã được ngắt.
+Không chạy mô hình thật. Giữ nguyên các thay đổi đang dở trên nhánh `feat/c3-pipeline`.
+
+- Task 9: `checkout.py`, `review.py`, CLI review và các test đã viết trên đĩa, chưa commit/chưa được chấp nhận qua hai vòng review.
+- Lead chạy test tập trung gần nhất: **23 passed**; con số này chưa xác nhận các sửa đổi cuối sau đó.
+- Agent đang xử lý sửa đổi cuối: SHA đúng 40 ký tự; D2 yêu cầu trực tiếp danh sách `retained_pr_ids`, không fallback `selected_pr_ids`.
+- Agent báo đã sửa artifact JSON không phải object, checkout tạm trùng số PR giữa repo và lỗi probe phiên bản CLI; cần reviewer xác minh lại trên trạng thái cuối.
+- Khi tiếp tục: kiểm tra git diff, chạy lại test task 9 và toàn suite; giao review đặc tả lại rồi review chất lượng, sửa lỗi trước commit. Sau đó task 10–12 và 14; task 13 vẫn để sau.
+- Theo yêu cầu mới của người dùng, tiếp tục dùng subagent với model nhẹ hơn.
+
+## Tiếp tục — 2026-11-25
+
+Task 9 đã sửa xong SHA 40 ký tự, manifest D2, artifact không phải object, thư mục checkout tạm và xác minh phiên bản CLI. Hai vòng review độc lập đã chấp nhận. Lead chạy toàn bộ suite: 194 passed, 1 skipped trước khi commit task 9.
