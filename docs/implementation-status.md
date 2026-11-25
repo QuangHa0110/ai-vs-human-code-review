@@ -17,7 +17,8 @@ Không chạy thí nghiệm chính trước khi pilot chốt mô hình và cấu
 | 8 | Phân loại nhận xét | `task08_classify` | Qua hai vòng review; D1/D3 giữ nguyên tham chiếu |
 | 9 | Checkout và chạy review | `task09_resume_light` (GPT-6 Luna) | Qua review đặc tả và chất lượng; 25 test riêng đạt |
 | 10 | Giám khảo so khớp | `task10_judge_light` (GPT-6 Luna) | Qua review đặc tả và chất lượng |
-| 11–12 | Chỉ số, kiểm định, phân tích lực | Chưa giao | Chờ mô hình kết quả |
+| 11 | Chỉ số, tập gộp, độ dao động | `task11_metrics_light` (GPT-6 Luna) | Qua review đặc tả và chất lượng |
+| 12 | Kiểm định, phân tích lực | Chưa giao | Chờ task 11 |
 | 13 | Công cụ chấm tay | Để sau theo yêu cầu | Hoãn |
 | 14 | Tích hợp CLI, xuất báo cáo, hướng dẫn | Chưa giao | Chờ các module |
 
@@ -64,3 +65,5 @@ Không chạy mô hình thật. Giữ nguyên các thay đổi đang dở trên 
 Task 9 đã sửa xong SHA 40 ký tự, manifest D2, artifact không phải object, thư mục checkout tạm và xác minh phiên bản CLI. Hai vòng review độc lập đã chấp nhận. Lead chạy toàn bộ suite: 194 passed, 1 skipped trước khi commit task 9.
 
 Task 10 đã qua hai vòng review; hồi quy chặn judgment cũ trên review lỗi và artifact hỏng khi resume. Full suite: 214 passed, 1 skipped. Không gọi mô hình thật.
+
+Task 11 qua hai vòng review; thêm guard ID tham chiếu trùng trong cùng PR. Full suite: 235 passed, 1 skipped.
