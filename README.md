@@ -1,6 +1,6 @@
 # AI review compared with human code review
 
-C3 is a research pipeline for measuring how AI code review compares with human review on Java pull requests. The design and research questions are described in [the study design](docs/specs/2026-11-21-c3-ai-code-review-design.md); dataset provenance and limits are in [data notes](docs/data-notes.md).
+C3 is a research pipeline for measuring how AI code review compares with human review on Java pull requests. The design and research questions are described in [the study design](docs/specs/2026-11-21-c3-ai-code-review-design.md); dataset provenance and limits are in [data notes](docs/data-notes.md). The completed software work and remaining experiment steps are recorded in the [implementation report](docs/implementation-report.md).
 
 ## Setup
 
